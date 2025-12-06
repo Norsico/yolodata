@@ -123,8 +123,8 @@ def bbox_iou(
     [MODIFIED] Focaler-IoU Implementation based on arXiv:2401.10525
     """
     
-    # ❌❌❌【自爆测试】训练开始时如果炸了，说明改对了！(确认后删除此行) ❌❌❌
-    raise RuntimeError("✅✅✅ 抓到了！这才是真正的 Loss 计算函数！Focaler-IoU 代码正在执行！✅✅✅")
+    # # ❌❌❌【自爆测试】训练开始时如果炸了，说明改对了！(确认后删除此行) ❌❌❌
+    # raise RuntimeError("✅✅✅ 抓到了！这才是真正的 Loss 计算函数！Focaler-IoU 代码正在执行！✅✅✅")
 
     # Get the coordinates of bounding boxes
     if xywh:  # transform from xywh to xyxy
