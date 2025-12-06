@@ -85,14 +85,7 @@ def box_iou(box1: torch.Tensor, box2: torch.Tensor, eps: float = 1e-7) -> torch.
     [cite_start]Modified with Focaler-IoU logic [cite: 204] to improve small object matching.
     """
     
-    # --- 🔍 调试探针 (只打印一次) ---
-    if not hasattr(box_iou, 'has_printed'):
-        print("\n" + "="*60)
-        print("🔥🔥🔥 [DEBUG SUCCESS] Focaler-IoU 代码已生效！正在执行！🔥🔥🔥")
-        print("     (看到这句话，说明你的环境路径和代码修改是完全正确的)")
-        print("="*60 + "\n")
-        box_iou.has_printed = True
-    # --------------------------------
+    raise RuntimeError("✅✅✅ 成功拦截！Focaler-IoU 代码正在被执行！程序主动崩溃以证明！✅✅✅")
 
     # NOTE: Need .float() to get accurate iou values
     # inter(N,M) = (rb(N,M,2) - lt(N,M,2)).clamp(0).prod(2)
