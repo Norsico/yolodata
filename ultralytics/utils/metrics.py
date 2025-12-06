@@ -80,33 +80,26 @@ def bbox_ioa(box1: np.ndarray, box2: np.ndarray, iou: bool = False, eps: float =
 import torch
 
 def box_iou(box1: torch.Tensor, box2: torch.Tensor, eps: float = 1e-7) -> torch.Tensor:
-    """
-    Calculate intersection-over-union (IoU) of boxes.
-    [cite_start]Modified with Focaler-IoU logic [cite: 204] to improve small object matching.
-    """
-    
-    raise RuntimeError("✅✅✅ 成功拦截！Focaler-IoU 代码正在被执行！程序主动崩溃以证明！✅✅✅")
+    """Calculate intersection-over-union (IoU) of boxes.
 
+    Args:
+        box1 (torch.Tensor): A tensor of shape (N, 4) representing N bounding boxes in (x1, y1, x2, y2) format.
+        box2 (torch.Tensor): A tensor of shape (M, 4) representing M bounding boxes in (x1, y1, x2, y2) format.
+        eps (float, optional): A small value to avoid division by zero.
+
+    Returns:
+        (torch.Tensor): An NxM tensor containing the pairwise IoU values for every element in box1 and box2.
+
+    References:
+        https://github.com/pytorch/vision/blob/main/torchvision/ops/boxes.py
+    """
     # NOTE: Need .float() to get accurate iou values
     # inter(N,M) = (rb(N,M,2) - lt(N,M,2)).clamp(0).prod(2)
     (a1, a2), (b1, b2) = box1.float().unsqueeze(1).chunk(2, 2), box2.float().unsqueeze(0).chunk(2, 2)
     inter = (torch.min(a2, b2) - torch.max(a1, b1)).clamp_(0).prod(2)
 
-    # 1. 计算原始 IoU (Standard IoU)
-    area1 = (a2 - a1).prod(2)
-    area2 = (b2 - b1).prod(2)
-    iou = inter / (area1 + area2 - inter + eps)
-
-    # ==========================================================
-    # 2. Focaler-IoU 核心植入 (Based on Eq. 14 in Paper) 
-    # ==========================================================
-    d = 0.00
-    u = 0.95
-
-    # 公式: Focaler-IoU
-    focaler_iou = ((iou - d) / (u - d)).clamp(0, 1)
-
-    return focaler_iou
+    # IoU = inter / (area1 + area2 - inter)
+    return inter / ((a2 - a1).prod(2) + (b2 - b1).prod(2) - inter + eps)
 
 
 def bbox_iou(
