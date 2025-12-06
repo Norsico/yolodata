@@ -77,26 +77,29 @@ def bbox_ioa(box1: np.ndarray, box2: np.ndarray, iou: bool = False, eps: float =
 #     return inter / ((a2 - a1).prod(2) + (b2 - b1).prod(2) - inter + eps)
 
 
+import torch
+
 def box_iou(box1: torch.Tensor, box2: torch.Tensor, eps: float = 1e-7) -> torch.Tensor:
     """
     Calculate intersection-over-union (IoU) of boxes.
-    Modified with Focaler-IoU logic [cite: 204] to improve small object matching.
-
-    Args:
-        box1 (torch.Tensor): (N, 4) bounding boxes in (x1, y1, x2, y2) format.
-        box2 (torch.Tensor): (M, 4) bounding boxes in (x1, y1, x2, y2) format.
-        eps (float, optional): A small value to avoid division by zero.
-
-    Returns:
-        (torch.Tensor): An NxM tensor containing the Focaler-IoU values.
+    [cite_start]Modified with Focaler-IoU logic [cite: 204] to improve small object matching.
     """
+    
+    # --- 🔍 调试探针 (只打印一次) ---
+    if not hasattr(box_iou, 'has_printed'):
+        print("\n" + "="*60)
+        print("🔥🔥🔥 [DEBUG SUCCESS] Focaler-IoU 代码已生效！正在执行！🔥🔥🔥")
+        print("     (看到这句话，说明你的环境路径和代码修改是完全正确的)")
+        print("="*60 + "\n")
+        box_iou.has_printed = True
+    # --------------------------------
+
     # NOTE: Need .float() to get accurate iou values
     # inter(N,M) = (rb(N,M,2) - lt(N,M,2)).clamp(0).prod(2)
     (a1, a2), (b1, b2) = box1.float().unsqueeze(1).chunk(2, 2), box2.float().unsqueeze(0).chunk(2, 2)
     inter = (torch.min(a2, b2) - torch.max(a1, b1)).clamp_(0).prod(2)
 
     # 1. 计算原始 IoU (Standard IoU)
-    # IoU = inter / (area1 + area2 - inter)
     area1 = (a2 - a1).prod(2)
     area2 = (b2 - b1).prod(2)
     iou = inter / (area1 + area2 - inter + eps)
@@ -104,13 +107,10 @@ def box_iou(box1: torch.Tensor, box2: torch.Tensor, eps: float = 1e-7) -> torch.
     # ==========================================================
     # 2. Focaler-IoU 核心植入 (Based on Eq. 14 in Paper) 
     # ==========================================================
-    # 线性区间映射：将 IoU 从 [d, u] 映射到 [0, 1]
-    # d (down): 阈值下限, u (up): 阈值上限
-    # 针对小目标(难样本)，我们希望放大低 IoU 的值，推荐 d=0.00, u=0.95
     d = 0.00
     u = 0.95
 
-    # 公式: Focaler-IoU = ((IoU - d) / (u - d)).clamp(0, 1)
+    # 公式: Focaler-IoU
     focaler_iou = ((iou - d) / (u - d)).clamp(0, 1)
 
     return focaler_iou
