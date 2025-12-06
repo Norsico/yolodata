@@ -1557,3 +1557,23 @@ class OBBMetrics(DetMetrics):
         DetMetrics.__init__(self, names)
         # TODO: probably remove task as well
         self.task = "obb"
+
+def nwd_loss(pred, target, constant=3.0, eps=1e-7):
+    """
+    Normalized Wasserstein Distance (NWD) Loss for small object detection.
+    Based on the paper: YOLOv8-QSD [cite: 589, 629]
+    """
+    # pred, target shape: [N, 4] (x, y, w, h)
+    
+    # 获取中心点和宽高
+    b1_x, b1_y, b1_w, b1_h = pred[:, 0], pred[:, 1], pred[:, 2], pred[:, 3]
+    b2_x, b2_y, b2_w, b2_h = target[:, 0], target[:, 1], target[:, 2], target[:, 3]
+
+    # 将 bbox 建模为高斯分布 (Center, Sigma)
+    # Sigma = wh / 2 [cite: 593]
+    # 计算 Wasserstein 距离的平方 (Eq. 14 in paper)
+    w2 = torch.pow(b1_x - b2_x, 2) + torch.pow(b1_y - b2_y, 2) + \
+         torch.pow(b1_w / 2 - b2_w / 2, 2) + torch.pow(b1_h / 2 - b2_h / 2, 2)
+
+    # 归一化 NWD = exp(-sqrt(W2) / C)
+    return torch.exp(-torch.sqrt(w2 + eps) / constant)

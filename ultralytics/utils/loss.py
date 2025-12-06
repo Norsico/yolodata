@@ -13,7 +13,7 @@ from ultralytics.utils.ops import crop_mask, xywh2xyxy, xyxy2xywh
 from ultralytics.utils.tal import RotatedTaskAlignedAssigner, TaskAlignedAssigner, dist2bbox, dist2rbox, make_anchors
 from ultralytics.utils.torch_utils import autocast
 
-from .metrics import bbox_iou, probiou
+from .metrics import bbox_iou, probiou, nwd_loss
 from .tal import bbox2dist
 
 
@@ -138,6 +138,80 @@ class BboxLoss(nn.Module):
 
         return loss_iou, loss_dfl
 
+## 更细损失函数
+# class BboxLoss(nn.Module):
+#     """Criterion class for computing training losses for bounding boxes."""
+
+#     def __init__(self, reg_max: int = 16):
+#         """Initialize the BboxLoss module with regularization maximum and DFL settings."""
+#         super().__init__()
+#         self.dfl_loss = DFLoss(reg_max) if reg_max > 1 else None
+
+#     def forward(
+#         self,
+#         pred_dist: torch.Tensor,
+#         pred_bboxes: torch.Tensor,
+#         anchor_points: torch.Tensor,
+#         target_bboxes: torch.Tensor,
+#         target_scores: torch.Tensor,
+#         target_scores_sum: torch.Tensor,
+#         fg_mask: torch.Tensor,
+#     ) -> tuple[torch.Tensor, torch.Tensor]:
+#         """Compute IoU and DFL losses for bounding boxes with NWD improvement."""
+        
+#         # 1. 获取权重
+#         weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
+        
+#         # 2. 获取前景的预测框和真实框 (xyxy 格式)
+#         p_bboxes = pred_bboxes[fg_mask]
+#         t_bboxes = target_bboxes[fg_mask]
+
+#         # =================== 修改开始：NWD Loss 计算 ===================
+#         # 论文指出小目标对 IoU 极其敏感，改用 NWD 可以平滑 Loss [cite: 528]
+        
+#         # A. 将 xyxy 转换为 xywh (用于构建高斯分布)
+#         # xyxy: [x1, y1, x2, y2] -> xywh: [cx, cy, w, h]
+#         p_xywh = torch.stack([
+#             (p_bboxes[:, 0] + p_bboxes[:, 2]) / 2,  # cx
+#             (p_bboxes[:, 1] + p_bboxes[:, 3]) / 2,  # cy
+#             p_bboxes[:, 2] - p_bboxes[:, 0],        # w
+#             p_bboxes[:, 3] - p_bboxes[:, 1]         # h
+#         ], dim=-1)
+
+#         t_xywh = torch.stack([
+#             (t_bboxes[:, 0] + t_bboxes[:, 2]) / 2,  # cx
+#             (t_bboxes[:, 1] + t_bboxes[:, 3]) / 2,  # cy
+#             t_bboxes[:, 2] - t_bboxes[:, 0],        # w
+#             t_bboxes[:, 3] - t_bboxes[:, 1]         # h
+#         ], dim=-1)
+
+#         # print(f"DEBUG: wh_mean={p_xywh[:, 2:].mean().item()}")
+#         # B. 计算 NWD Loss (调用之前添加的函数)
+#         nwd = nwd_loss(p_xywh, t_xywh)
+
+#         # C. 计算原本的 CIoU Loss (xyxy 格式)
+#         iou = bbox_iou(p_bboxes, t_bboxes, xywh=False, CIoU=True)
+
+#         # D. 混合 Loss
+#         # alpha 是 NWD 的权重，建议 0.5 到 0.7 之间。
+#         # 针对 SODA10M 小目标多，NWD 权重可以给到 0.6 或 0.5
+#         # print(f"DEBUG: NWD Loss is running! nwd={nwd.mean().item():.4f}")
+#         alpha = 0.6 
+#         combined_iou = alpha * nwd + (1 - alpha) * iou
+        
+#         # 计算加权后的 Box Loss (注意这里是 1.0 - combined_metric)
+#         loss_iou = ((1.0 - combined_iou) * weight).sum() / target_scores_sum
+#         # =================== 修改结束 ===================
+
+#         # DFL loss (保持原样)
+#         if self.dfl_loss:
+#             target_ltrb = bbox2dist(anchor_points, target_bboxes, self.dfl_loss.reg_max - 1)
+#             loss_dfl = self.dfl_loss(pred_dist[fg_mask].view(-1, self.dfl_loss.reg_max), target_ltrb[fg_mask]) * weight
+#             loss_dfl = loss_dfl.sum() / target_scores_sum
+#         else:
+#             loss_dfl = torch.tensor(0.0).to(pred_dist.device)
+
+#         return loss_iou, loss_dfl
 
 class RotatedBboxLoss(BboxLoss):
     """Criterion class for computing training losses for rotated bounding boxes."""
