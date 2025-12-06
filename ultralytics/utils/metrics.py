@@ -118,25 +118,14 @@ def bbox_iou(
     CIoU: bool = False,
     eps: float = 1e-7,
 ) -> torch.Tensor:
-    """Calculate the Intersection over Union (IoU) between bounding boxes.
-
-    This function supports various shapes for `box1` and `box2` as long as the last dimension is 4. For instance, you
-    may pass tensors shaped like (4,), (N, 4), (B, N, 4), or (B, N, 1, 4). Internally, the code will split the last
-    dimension into (x, y, w, h) if `xywh=True`, or (x1, y1, x2, y2) if `xywh=False`.
-
-    Args:
-        box1 (torch.Tensor): A tensor representing one or more bounding boxes, with the last dimension being 4.
-        box2 (torch.Tensor): A tensor representing one or more bounding boxes, with the last dimension being 4.
-        xywh (bool, optional): If True, input boxes are in (x, y, w, h) format. If False, input boxes are in (x1, y1,
-            x2, y2) format.
-        GIoU (bool, optional): If True, calculate Generalized IoU.
-        DIoU (bool, optional): If True, calculate Distance IoU.
-        CIoU (bool, optional): If True, calculate Complete IoU.
-        eps (float, optional): A small value to avoid division by zero.
-
-    Returns:
-        (torch.Tensor): IoU, GIoU, DIoU, or CIoU values depending on the specified flags.
     """
+    Calculate the Intersection over Union (IoU) between bounding boxes.
+    [MODIFIED] Focaler-IoU Implementation based on arXiv:2401.10525
+    """
+    
+    # ❌❌❌【自爆测试】训练开始时如果炸了，说明改对了！(确认后删除此行) ❌❌❌
+    raise RuntimeError("✅✅✅ 抓到了！这才是真正的 Loss 计算函数！Focaler-IoU 代码正在执行！✅✅✅")
+
     # Get the coordinates of bounding boxes
     if xywh:  # transform from xywh to xyxy
         (x1, y1, w1, h1), (x2, y2, w2, h2) = box1.chunk(4, -1), box2.chunk(4, -1)
@@ -159,23 +148,42 @@ def bbox_iou(
 
     # IoU
     iou = inter / union
+
+    # ==========================================================
+    # 🔥 [Focaler-IoU Core Logic] 🔥
+    # ==========================================================
+    # Focaler-IoU: Focus on difficult samples by reshaping IoU curve
+    # d (down): lower threshold, u (up): upper threshold
+    # Recommended for small objects: d=0.00, u=0.95
+    d = 0.00
+    u = 0.95
+    focaler_iou = ((iou - d) / (u - d)).clamp(0, 1)
+
+    # If using CIoU/DIoU/GIoU, apply penalty terms to Focaler-IoU
     if CIoU or DIoU or GIoU:
-        cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)  # convex (smallest enclosing box) width
+        cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)  # convex width
         ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)  # convex height
-        if CIoU or DIoU:  # Distance or Complete IoU https://arxiv.org/abs/1911.08287v1
+        
+        if CIoU or DIoU:
             c2 = cw.pow(2) + ch.pow(2) + eps  # convex diagonal squared
-            rho2 = (
-                (b2_x1 + b2_x2 - b1_x1 - b1_x2).pow(2) + (b2_y1 + b2_y2 - b1_y1 - b1_y2).pow(2)
-            ) / 4  # center dist**2
-            if CIoU:  # https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
+            rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2).pow(2) + (b2_y1 + b2_y2 - b1_y1 - b1_y2).pow(2)) / 4
+            
+            if CIoU:
                 v = (4 / math.pi**2) * ((w2 / h2).atan() - (w1 / h1).atan()).pow(2)
                 with torch.no_grad():
                     alpha = v / (v - iou + (1 + eps))
-                return iou - (rho2 / c2 + v * alpha)  # CIoU
-            return iou - rho2 / c2  # DIoU
+                # Return Focaler-CIoU
+                return focaler_iou - (rho2 / c2 + v * alpha)
+            
+            # Return Focaler-DIoU
+            return focaler_iou - rho2 / c2
+            
         c_area = cw * ch + eps  # convex area
-        return iou - (c_area - union) / c_area  # GIoU https://arxiv.org/pdf/1902.09630.pdf
-    return iou  # IoU
+        # Return Focaler-GIoU
+        return focaler_iou - (c_area - union) / c_area
+    
+    # Return vanilla Focaler-IoU
+    return focaler_iou
 
 
 def mask_iou(mask1: torch.Tensor, mask2: torch.Tensor, eps: float = 1e-7) -> torch.Tensor:
