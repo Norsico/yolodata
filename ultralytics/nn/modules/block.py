@@ -1988,22 +1988,23 @@ class Down_wt(nn.Module):
         return x
 
 
+# ---------------------- 基础组件 (保持不变) ----------------------
 class GroupBatchnorm2d(nn.Module):
     def __init__(self, c_num:int, group_num:int = 16, eps:float = 1e-10):
         super(GroupBatchnorm2d,self).__init__()
-        # 修复: 确保 group_num 不超过通道数，防止报错
-        self.group_num = min(group_num, c_num) 
-        self.weight = nn.Parameter(torch.randn(c_num, 1, 1))
-        self.bias = nn.Parameter(torch.zeros(c_num, 1, 1))
+        self.group_num = group_num
+        self.gamma = nn.Parameter(torch.randn(c_num, 1, 1))
+        self.beta = nn.Parameter(torch.zeros(c_num, 1, 1))
         self.eps = eps
+
     def forward(self, x):
         N, C, H, W = x.size()
         x = x.view(N, self.group_num, -1)
         mean = x.mean(dim = 2, keepdim = True)
         std = x.std(dim = 2, keepdim = True)
-        x = (x - mean) / (std+self.eps)
+        x = (x - mean) / (std + self.eps)
         x = x.view(N, C, H, W)
-        return x * self.weight + self.bias
+        return x * self.gamma + self.beta
 
 class SRU(nn.Module):
     def __init__(self, oup_channels:int, group_num:int = 16, gate_treshold:float = 0.5, torch_gn:bool = True):
@@ -2064,54 +2065,32 @@ class ScConv(nn.Module):
         x = self.CRU(x)
         return x
 
+# ---------------------- 修改后的下采样模块 ----------------------
 
-class WT_ScConv(nn.Module):
+class ScConv_Down(nn.Module):
     """
-    创新点: 
-    先用 ScConv 清洗特征(去噪)，再用 (Conv + Haar小波) 双流下采样。
+    ScConv 下采样模块 (无 HWD 版本)
+    逻辑: ScConv (特征清洗) -> Conv stride=2 (下采样)
     """
-    def __init__(self, c1, c2):
+    def __init__(self, c1, c2, k=3, s=2):
         super().__init__()
         
         # 1. 特征清洗: 使用 ScConv 整理输入特征
-        # 这一步不改变尺寸，只抑制背景噪声，突出前景
+        # 这一步输入输出通道数不变 (c1 -> c1)
+        # 作用：SRU去除空间冗余，CRU去除通道冗余
         self.sc_process = ScConv(c1)
         
-        # 2. 分支A: 传统卷积下采样 (负责语义)
-        # 输入是经过清洗的特征
-        self.cv1 = nn.Conv2d(c1, c2, kernel_size=3, stride=2, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(c2)
-        
-        # 3. 分支B: Haar 小波下采样 (负责纹理细节)
-        # 小波需要原汁原味的信号，所以我们让它处理清洗后的特征
-        self.wt_process = nn.Sequential(
-            nn.Conv2d(c1 * 4, c2, kernel_size=1, stride=1, bias=False),
-            nn.BatchNorm2d(c2)
+        # 2. 标准卷积下采样
+        # 作用：降低分辨率，同时变换通道数 c1 -> c2
+        self.cv_down = nn.Sequential(
+            nn.Conv2d(c1, c2, kernel_size=k, stride=s, padding=k//2, bias=False),
+            nn.BatchNorm2d(c2),
+            nn.SiLU()
         )
-        
-        self.act = nn.SiLU()
 
     def forward(self, x):
-        # 步骤 1: SCConv 清洗特征 (这是 SODA10M 提分的关键)
-        x_clean = self.sc_process(x)
-        
-        # 步骤 2: 卷积分支
-        branch_conv = self.bn1(self.cv1(x_clean))
-        
-        # 步骤 3: 小波分支 (纯 PyTorch 实现)
-        # 这里的 x 建议用 x_clean，因为背景噪声已经被抑制了，小波提取的边缘会更干净
-        x00 = x_clean[:, :, 0::2, 0::2]
-        x01 = x_clean[:, :, 0::2, 1::2]
-        x10 = x_clean[:, :, 1::2, 0::2]
-        x11 = x_clean[:, :, 1::2, 1::2]
-        
-        yL = (x00 + x01 + x10 + x11) * 0.5
-        y_HL = (x00 - x01 + x10 - x11) * 0.5
-        y_LH = (x00 + x01 - x10 - x11) * 0.5
-        y_HH = (x00 - x01 - x10 + x11) * 0.5
-        
-        branch_wt = torch.cat([yL, y_HL, y_LH, y_HH], dim=1)
-        branch_wt = self.wt_process(branch_wt)
-        
-        # 步骤 4: 融合
-        return self.act(branch_conv + branch_wt)
+        # 先清洗
+        x = self.sc_process(x)
+        # 再下采样
+        x = self.cv_down(x)
+        return x
