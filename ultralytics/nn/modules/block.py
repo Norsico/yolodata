@@ -1986,3 +1986,132 @@ class Down_wt(nn.Module):
         x = self.conv_bn_relu(x)
 
         return x
+
+
+class GroupBatchnorm2d(nn.Module):
+    def __init__(self, c_num:int, group_num:int = 16, eps:float = 1e-10):
+        super(GroupBatchnorm2d,self).__init__()
+        # 修复: 确保 group_num 不超过通道数，防止报错
+        self.group_num = min(group_num, c_num) 
+        self.weight = nn.Parameter(torch.randn(c_num, 1, 1))
+        self.bias = nn.Parameter(torch.zeros(c_num, 1, 1))
+        self.eps = eps
+    def forward(self, x):
+        N, C, H, W = x.size()
+        x = x.view(N, self.group_num, -1)
+        mean = x.mean(dim = 2, keepdim = True)
+        std = x.std(dim = 2, keepdim = True)
+        x = (x - mean) / (std+self.eps)
+        x = x.view(N, C, H, W)
+        return x * self.weight + self.bias
+
+class SRU(nn.Module):
+    def __init__(self, oup_channels:int, group_num:int = 16, gate_treshold:float = 0.5, torch_gn:bool = True):
+        super().__init__()
+        # 修复: 确保 group_num 安全
+        gn_groups = min(group_num, oup_channels)
+        self.gn = nn.GroupNorm(num_channels = oup_channels, num_groups = gn_groups) if torch_gn else GroupBatchnorm2d(c_num = oup_channels, group_num = gn_groups)
+        self.gate_treshold = gate_treshold
+        self.sigomid = nn.Sigmoid()
+
+    def forward(self,x):
+        gn_x = self.gn(x)
+        w_gamma = self.gn.weight/sum(self.gn.weight)
+        w_gamma = w_gamma.view(1,-1,1,1)
+        reweigts = self.sigomid(gn_x * w_gamma)
+        w1 = torch.where(reweigts > self.gate_treshold, torch.ones_like(reweigts), reweigts)
+        w2 = torch.where(reweigts > self.gate_treshold, torch.zeros_like(reweigts), reweigts)
+        x_1 = w1 * x
+        x_2 = w2 * x
+        y = self.reconstruct(x_1,x_2)
+        return y
+    
+    def reconstruct(self,x_1,x_2):
+        x_11,x_12 = torch.split(x_1, x_1.size(1)//2, dim=1)
+        x_21,x_22 = torch.split(x_2, x_2.size(1)//2, dim=1)
+        return torch.cat([x_11+x_22, x_12+x_21], dim=1)
+
+class CRU(nn.Module):
+    def __init__(self, op_channel:int, alpha:float = 1/2, squeeze_radio:int = 2, group_size:int = 2, group_kernel_size:int = 3):
+        super().__init__()
+        self.up_channel = int(alpha*op_channel)
+        self.low_channel = op_channel - self.up_channel
+        self.squeeze1 = nn.Conv2d(self.up_channel, self.up_channel//squeeze_radio, kernel_size=1, bias=False)
+        self.squeeze2 = nn.Conv2d(self.low_channel, self.low_channel//squeeze_radio, kernel_size=1, bias=False)
+        self.GWC = nn.Conv2d(self.up_channel//squeeze_radio, op_channel, kernel_size=group_kernel_size, stride=1, padding=group_kernel_size//2, groups=group_size)
+        self.PWC1 = nn.Conv2d(self.up_channel//squeeze_radio, op_channel, kernel_size=1, bias=False)
+        self.PWC2 = nn.Conv2d(self.low_channel//squeeze_radio, op_channel-self.low_channel//squeeze_radio, kernel_size=1, bias=False)
+        self.advavg = nn.AdaptiveAvgPool2d(1)
+
+    def forward(self,x):
+        up,low = torch.split(x,[self.up_channel,self.low_channel],dim=1)
+        up,low = self.squeeze1(up),self.squeeze2(low)
+        Y1 = self.GWC(up) + self.PWC1(up)
+        Y2 = torch.cat([self.PWC2(low), low], dim=1)
+        out = torch.cat([Y1,Y2], dim=1)
+        out = F.softmax(self.advavg(out), dim=1) * out
+        out1,out2 = torch.split(out, out.size(1)//2, dim=1)
+        return out1+out2
+
+class ScConv(nn.Module):
+    def __init__(self, op_channel:int, group_num:int = 4, gate_treshold:float = 0.5, alpha:float = 1/2, squeeze_radio:int = 2, group_size:int = 2, group_kernel_size:int = 3):
+        super().__init__()
+        self.SRU = SRU(op_channel, group_num=group_num, gate_treshold=gate_treshold)
+        self.CRU = CRU(op_channel, alpha=alpha, squeeze_radio=squeeze_radio, group_size=group_size, group_kernel_size=group_kernel_size)
+    
+    def forward(self,x):
+        x = self.SRU(x)
+        x = self.CRU(x)
+        return x
+
+
+class WT_ScConv(nn.Module):
+    """
+    创新点: 
+    先用 ScConv 清洗特征(去噪)，再用 (Conv + Haar小波) 双流下采样。
+    """
+    def __init__(self, c1, c2):
+        super().__init__()
+        
+        # 1. 特征清洗: 使用 ScConv 整理输入特征
+        # 这一步不改变尺寸，只抑制背景噪声，突出前景
+        self.sc_process = ScConv(c1)
+        
+        # 2. 分支A: 传统卷积下采样 (负责语义)
+        # 输入是经过清洗的特征
+        self.cv1 = nn.Conv2d(c1, c2, kernel_size=3, stride=2, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(c2)
+        
+        # 3. 分支B: Haar 小波下采样 (负责纹理细节)
+        # 小波需要原汁原味的信号，所以我们让它处理清洗后的特征
+        self.wt_process = nn.Sequential(
+            nn.Conv2d(c1 * 4, c2, kernel_size=1, stride=1, bias=False),
+            nn.BatchNorm2d(c2)
+        )
+        
+        self.act = nn.SiLU()
+
+    def forward(self, x):
+        # 步骤 1: SCConv 清洗特征 (这是 SODA10M 提分的关键)
+        x_clean = self.sc_process(x)
+        
+        # 步骤 2: 卷积分支
+        branch_conv = self.bn1(self.cv1(x_clean))
+        
+        # 步骤 3: 小波分支 (纯 PyTorch 实现)
+        # 这里的 x 建议用 x_clean，因为背景噪声已经被抑制了，小波提取的边缘会更干净
+        x00 = x_clean[:, :, 0::2, 0::2]
+        x01 = x_clean[:, :, 0::2, 1::2]
+        x10 = x_clean[:, :, 1::2, 0::2]
+        x11 = x_clean[:, :, 1::2, 1::2]
+        
+        yL = (x00 + x01 + x10 + x11) * 0.5
+        y_HL = (x00 - x01 + x10 - x11) * 0.5
+        y_LH = (x00 + x01 - x10 - x11) * 0.5
+        y_HH = (x00 - x01 - x10 + x11) * 0.5
+        
+        branch_wt = torch.cat([yL, y_HL, y_LH, y_HH], dim=1)
+        branch_wt = self.wt_process(branch_wt)
+        
+        # 步骤 4: 融合
+        return self.act(branch_conv + branch_wt)

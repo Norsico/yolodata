@@ -70,6 +70,7 @@ from ultralytics.nn.modules import (
     v10Detect,
     DySample,
     Down_wt,
+    WT_ScConv,
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -1555,6 +1556,7 @@ def parse_model(d, ch, verbose=True):
             SCDown,
             C2fCIB,
             A2C2f,
+            WT_ScConv
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments
@@ -1643,7 +1645,7 @@ def parse_model(d, ch, verbose=True):
         elif m is CBFuse:
             c2 = ch[f[-1]]
 
-        
+
         # ==================== 1. 新增 DySample ====================
         elif m is DySample:
             c1 = ch[f]
