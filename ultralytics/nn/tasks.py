@@ -68,6 +68,7 @@ from ultralytics.nn.modules import (
     YOLOEDetect,
     YOLOESegment,
     v10Detect,
+    DySample,
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -1640,6 +1641,14 @@ def parse_model(d, ch, verbose=True):
             args = [c1, c2, *args[1:]]
         elif m is CBFuse:
             c2 = ch[f[-1]]
+        
+        # ==================== 新增 DySample ====================
+        elif m is DySample:
+            c1 = ch[f]
+            c2 = c1
+            args = [c1, *args]
+        # ==================== 新增代码结束 ====================
+
         elif m in frozenset({TorchVision, Index}):
             c2 = args[0]
             c1 = ch[f]

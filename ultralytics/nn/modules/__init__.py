@@ -75,6 +75,7 @@ from .conv import (
     LightConv,
     RepConv,
     SpatialAttention,
+    DySample,
 )
 from .head import (
     OBB,
@@ -179,4 +180,5 @@ __all__ = (
     "YOLOEDetect",
     "YOLOESegment",
     "v10Detect",
+    "DySample",
 )

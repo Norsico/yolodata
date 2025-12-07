@@ -200,3 +200,4 @@ calibration_*.npy
 *.heic
 *.ico
 *.raw
+*.csv
