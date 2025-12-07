@@ -69,6 +69,7 @@ from ultralytics.nn.modules import (
     YOLOESegment,
     v10Detect,
     DySample,
+    Down_wt,
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -1641,13 +1642,25 @@ def parse_model(d, ch, verbose=True):
             args = [c1, c2, *args[1:]]
         elif m is CBFuse:
             c2 = ch[f[-1]]
+
         
-        # ==================== 新增 DySample ====================
+        # ==================== 1. 新增 DySample ====================
         elif m is DySample:
             c1 = ch[f]
             c2 = c1
             args = [c1, *args]
         # ==================== 新增代码结束 ====================
+
+
+        # ==================== 2. 新增 Down_wt (HWD) ====================
+        elif m is Down_wt:
+            c1, c2 = ch[f], args[0]
+            # 这一步非常重要！让通道数根据模型宽度(n/s/m/l)自动缩放
+            # 如果不加这行，你的 yolo11n 会拥有和 yolo11l 一样巨大的通道数，显存直接爆炸
+            c2 = make_divisible(min(c2, max_channels) * width, 8)
+            args = [c1, c2]
+        # ==================== 新增代码结束 ====================
+
 
         elif m in frozenset({TorchVision, Index}):
             c2 = args[0]

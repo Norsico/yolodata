@@ -59,6 +59,7 @@ from .block import (
     ResNetLayer,
     SCDown,
     TorchVision,
+    Down_wt,
 )
 from .conv import (
     CBAM,
@@ -181,4 +182,5 @@ __all__ = (
     "YOLOESegment",
     "v10Detect",
     "DySample",
+    "Down_wt",
 )
