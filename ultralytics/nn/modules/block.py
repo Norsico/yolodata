@@ -2094,3 +2094,34 @@ class ScConv_Down(nn.Module):
         # 再下采样
         x = self.cv_down(x)
         return x
+
+class SPDConv(nn.Module):
+    """
+    Space-to-Depth Convolution (SPD-Conv)
+    无损下采样模块，替代原本的 stride=2 卷积。
+    来源于: "No More Strided Convolutions for CNNs"
+    """
+    def __init__(self, c1, c2, dimension=1):
+        super().__init__()
+        # SPD 实际上把通道数扩充了 4 倍 (因为 H/2, W/2)
+        # 所以这里的卷积层要把 c1*4 压缩回 c2
+        self.gn = nn.GroupNorm(32, c1 * 4) # 归一化，有时候用BN也可以，GN对batch_size不敏感
+        self.conv = nn.Conv2d(c1 * 4, c2, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn = nn.BatchNorm2d(c2)
+        self.act = nn.SiLU()
+
+    def forward(self, x):
+        # x: [B, C, H, W]
+        # space_to_depth: 类似于切蛋糕，把 H, W 维度的信息切到 C 维度
+        x00 = x[:, :, 0::2, 0::2] # 偶数行，偶数列
+        x01 = x[:, :, 0::2, 1::2] # 偶数行，奇数列
+        x10 = x[:, :, 1::2, 0::2] # 奇数行，偶数列
+        x11 = x[:, :, 1::2, 1::2] # 奇数行，奇数列
+        
+        # 拼接在通道维度: [B, C*4, H/2, W/2]
+        x = torch.cat([x00, x01, x10, x11], dim=1)
+        
+        # 这里的卷积 stride=1，不再丢失信息
+        x = self.conv(self.gn(x))
+        x = self.act(self.bn(x))
+        return x

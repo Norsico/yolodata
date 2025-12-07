@@ -61,6 +61,7 @@ from .block import (
     TorchVision,
     Down_wt,
     ScConv_Down,
+    SPDConv
 )
 from .conv import (
     CBAM,
@@ -185,4 +186,5 @@ __all__ = (
     "DySample",
     "Down_wt",
     "ScConv_Down",
+    "SPDConv",
 )
