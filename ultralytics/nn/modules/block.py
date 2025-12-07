@@ -12,7 +12,6 @@ from ultralytics.utils.torch_utils import fuse_conv_and_bn
 from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad
 from .transformer import TransformerBlock
 
-from pytorch_wavelets import DWTForward
 
 __all__ = (
     "C1",
@@ -1949,18 +1948,41 @@ class SAVPE(nn.Module):
 class Down_wt(nn.Module):
     def __init__(self, in_ch, out_ch):
         super(Down_wt, self).__init__()
-        self.wt = DWTForward(J=1, mode='zero', wave='haar')
+        # 这里的 conv_bn_relu 保持不变
         self.conv_bn_relu = nn.Sequential(
-                                    nn.Conv2d(in_ch*4, out_ch, kernel_size=1, stride=1),
-                                    nn.BatchNorm2d(out_ch),   
-                                    nn.ReLU(inplace=True),                                 
-                                    ) 
+            nn.Conv2d(in_ch * 4, out_ch, kernel_size=1, stride=1),
+            nn.BatchNorm2d(out_ch),
+            nn.ReLU(inplace=True),
+        )
+
     def forward(self, x):
-        yL, yH = self.wt(x)
-        y_HL = yH[0][:,:,0,::]
-        y_LH = yH[0][:,:,1,::]
-        y_HH = yH[0][:,:,2,::]
-        x = torch.cat([yL, y_HL, y_LH, y_HH], dim=1)        
+        # =========== 纯 PyTorch 实现 Haar 小波 (AMP友好版) ===========
+        # 这种写法天然支持混合精度训练，不会报错
+        
+        # 相当于把图片切成 2x2 的块
+        # x00 = 左上, x01 = 右上, x10 = 左下, x11 = 右下
+        x00 = x[:, :, 0::2, 0::2]
+        x01 = x[:, :, 0::2, 1::2]
+        x10 = x[:, :, 1::2, 0::2]
+        x11 = x[:, :, 1::2, 1::2]
+
+        # Haar 核心公式 (使用 0.5 作为归一化系数)
+        # LL: 低频 (平均值) - 对应 resize 缩小
+        yL = (x00 + x01 + x10 + x11) * 0.5
+        
+        # HL: 垂直高频 - 对应横向边缘
+        y_HL = (x00 - x01 + x10 - x11) * 0.5
+        
+        # LH: 水平高频 - 对应纵向边缘
+        y_LH = (x00 + x01 - x10 - x11) * 0.5
+        
+        # HH: 对角高频 - 对应对角细节
+        y_HH = (x00 - x01 - x10 + x11) * 0.5
+
+        # 拼接 (L, HL, LH, HH) -> 通道数变为 4 倍
+        x = torch.cat([yL, y_HL, y_LH, y_HH], dim=1)
+        
+        # 1x1 卷积调整通道
         x = self.conv_bn_relu(x)
 
         return x
