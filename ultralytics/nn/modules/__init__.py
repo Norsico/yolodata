@@ -61,7 +61,9 @@ from .block import (
     TorchVision,
     Down_wt,
     ScConv_Down,
-    SPDConv
+    SPDConv,
+    FrequencyGate,
+    HWD_Down
 )
 from .conv import (
     CBAM,
@@ -187,4 +189,6 @@ __all__ = (
     "Down_wt",
     "ScConv_Down",
     "SPDConv",
+    "FrequencyGate",
+    "HWD_Down"
 )

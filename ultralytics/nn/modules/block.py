@@ -2125,3 +2125,67 @@ class SPDConv(nn.Module):
         x = self.conv(self.gn(x))
         x = self.act(self.bn(x))
         return x
+
+from ultralytics.nn.modules import DySample
+
+class FrequencyGate(nn.Module):
+    """
+    FD-YOLO 核心组件: 频率门控融合模块
+    论文卖点: "Frequency-aware Dynamic Fusion"
+    """
+    def __init__(self, c_sem, c_detail, c_out):
+        super().__init__()
+        # c_sem: 主干 P3 的通道数 (通常 256)
+        # c_detail: 细节分支的通道数 (我们设为 128)
+        # c_out: 融合后输出的通道数 (保持 256)
+        
+        # 1. 门控生成器: 用语义信息判断哪里是物体
+        self.gate_gen = nn.Sequential(
+            nn.Conv2d(c_sem, c_sem // 2, 1),
+            nn.BatchNorm2d(c_sem // 2),
+            nn.SiLU(),
+            nn.Conv2d(c_sem // 2, c_detail, 1), # 输出通道对齐 detail
+            nn.Sigmoid() # 生成 0~1 的 mask
+        )
+        
+        # 2. 融合层
+        self.fusion = nn.Sequential(
+            nn.Conv2d(c_sem + c_detail, c_out, 1, bias=False),
+            nn.BatchNorm2d(c_out),
+            nn.SiLU()
+        )
+
+    def forward(self, x_sem, x_detail):
+        # x_sem: 来自主干 P3 [B, 256, 80, 80]
+        # x_detail: 来自细节分支 [B, 128, 80, 80]
+        
+        # 生成门控 (Gate)
+        gate = self.gate_gen(x_sem)
+        
+        # 门控机制: 只保留语义位置对应的细节 (抑制背景树叶噪声)
+        x_detail_clean = x_detail * gate
+        
+        # 拼接融合
+        return self.fusion(torch.cat([x_sem, x_detail_clean], dim=1))
+
+# 如果之前的 HWD 代码删了，这里是一个极简版，直接加进去
+class HWD_Down(nn.Module):
+    """ Haar Wavelet Downsampling: P2(High Res) -> P3(Low Res) """
+    def __init__(self, c1, c2):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(c1 * 4, c2, 1, bias=False),
+            nn.BatchNorm2d(c2),
+            nn.SiLU()
+        )
+    
+    def forward(self, x):
+        # Haar 小波变换
+        x00 = x[:, :, 0::2, 0::2]
+        x01 = x[:, :, 0::2, 1::2]
+        x10 = x[:, :, 1::2, 0::2]
+        x11 = x[:, :, 1::2, 1::2]
+        # 拼接 4 个分量
+        y = torch.cat([x00, x01, x10, x11], dim=1)
+        return self.conv(y)
+

@@ -71,7 +71,9 @@ from ultralytics.nn.modules import (
     DySample,
     Down_wt,
     ScConv_Down,
-    SPDConv
+    SPDConv,
+    FrequencyGate,
+    HWD_Down
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -1558,7 +1560,8 @@ def parse_model(d, ch, verbose=True):
             C2fCIB,
             A2C2f,
             ScConv_Down,
-            SPDConv
+            SPDConv,
+            HWD_Down
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments
@@ -1616,6 +1619,26 @@ def parse_model(d, ch, verbose=True):
             if m is C2fCIB:
                 legacy = False
         
+        # ================== FrequencyGate 逻辑 ==================
+        elif m is FrequencyGate:
+            # f 是来源层列表，例如 [-1, 17] -> 对应索引 [16, 18]
+            # args 是 YAML 里的参数，例如 [128, 256] -> [c_detail, c_out]
+            
+            # 1. 获取两个输入层的通道数
+            c_sem = ch[f[0]]     # 主语义流 (P3) 通道数
+            c_detail = ch[f[1]]  # 细节流 (Detail) 通道数
+            
+            # 2. 获取输出通道数 (YAML 中第二个参数)
+            c_out = args[1]
+            
+            # 3. 重组参数传给 __init__(self, c_sem, c_detail, c_out)
+            args = [c_sem, c_detail, c_out]
+            
+            # 4. 更新当前层的输出通道数 c2，供下一层使用
+            c2 = c_out
+        # =========================================================
+
+
         elif m is AIFI:
             args = [ch[f], *args]
         elif m in frozenset({HGStem, HGBlock}):
