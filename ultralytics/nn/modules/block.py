@@ -2265,3 +2265,107 @@ class C2f_Star(nn.Module):
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
 
+# ==========================================
+# FasterNet Core Modules (CVPR 2023)
+# Source: https://github.com/JierunChen/FasterNet
+# Adapted for YOLOv11 by User
+# ==========================================
+
+class PConv(nn.Module):
+    """
+    PConv: Partial Convolution
+    核心逻辑: 仅对 1/4 (默认 n_div=4) 的通道进行 3x3 卷积，其余通道保持不变。
+    这物理上减少了计算量 (FLOPs) 和内存访问 (IO)，非常适合 Nano 模型。
+    """
+    def __init__(self, dim, n_div=4, forward='split_cat'):
+        super().__init__()
+        self.dim_conv3 = dim // n_div
+        self.dim_untouched = dim - self.dim_conv3
+        
+        # 只卷一小部分通道
+        self.partial_conv3 = nn.Conv2d(self.dim_conv3, self.dim_conv3, 3, 1, 1, bias=False)
+
+        if forward == 'slicing':
+            self.forward = self.forward_slicing
+        elif forward == 'split_cat':
+            self.forward = self.forward_split_cat
+        else:
+            raise NotImplementedError
+
+    def forward_slicing(self, x):
+        # 推理时更快: 利用切片直接操作内存，避免 copy
+        # x: [B, C, H, W]
+        x[:, :self.dim_conv3, :, :] = self.partial_conv3(x[:, :self.dim_conv3, :, :])
+        return x
+
+    def forward_split_cat(self, x):
+        # 训练时更稳: split -> conv -> cat 保证梯度流清晰
+        x1, x2 = torch.split(x, [self.dim_conv3, self.dim_untouched], dim=1)
+        x1 = self.partial_conv3(x1)
+        x = torch.cat((x1, x2), 1)
+        return x
+
+
+class FasterBlock(nn.Module):
+    """
+    FasterNet 的基本单元 (MLPBlock)
+    结构: PConv -> Conv1x1 (升维/混合) -> BN/ReLU -> Conv1x1 (降维) -> DropPath
+    注意: 原文是一个 MLP 结构，这里我们稍微适配一下作为 YOLO 的 Bottleneck。
+    """
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
+        super().__init__()
+        # 这里的 c1, c2 通常在 C3_Faster 内部是一样的 (hidden channels)
+        # FasterNet 原文是: Spatial Mixing -> MLP
+        # 我们这里为了适配 C3 结构，简化为: PConv -> 1x1 -> Act -> 1x1
+        
+        self.pconv = PConv(c1, n_div=4, forward='split_cat')
+        
+        # MLP 部分: 两个 1x1 卷积
+        # 这里的 mlp_ratio 原文是 2，我们保持一致
+        mlp_hidden_dim = int(c1 * 2) 
+        
+        self.conv1 = nn.Conv2d(c1, mlp_hidden_dim, 1, 1, bias=False)
+        self.bn1 = nn.BatchNorm2d(mlp_hidden_dim)
+        self.act = nn.ReLU() # FasterNet 推荐 ReLU
+        
+        self.conv2 = nn.Conv2d(mlp_hidden_dim, c2, 1, 1, bias=False)
+        self.bn2 = nn.BatchNorm2d(c2)
+        
+        # Shortcut 连接
+        self.add = shortcut and c1 == c2
+
+    def forward(self, x):
+        input_x = x
+        
+        # 1. Spatial Mixing (PConv)
+        x = self.pconv(x)
+        
+        # 2. MLP (Channel Mixing)
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.act(x)
+        x = self.conv2(x)
+        x = self.bn2(x)
+        
+        # 3. Residual
+        return input_x + x if self.add else x
+
+
+class C3_Faster(nn.Module):
+    """
+    YOLO Wrapper for FasterBlock
+    用 FasterBlock 替换 C3k2 中的 Bottleneck
+    """
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__()
+        self.c = int(c2 * e) # hidden channels
+        self.cv1 = nn.Conv2d(c1, self.c, 1, 1, bias=False)
+        self.cv2 = nn.Conv2d(self.c, c2, 1, 1, bias=False)
+        
+        # 保持 YOLO 的 C3 结构: 输入 -> cv1 -> n个Blocks -> cv2 -> 输出
+        # 注意: 这里去掉了 C3k2 那种复杂的 Split 分流，采用更简单的串行结构，因为 PConv 本身已经很省了
+        self.m = nn.Sequential(*(FasterBlock(self.c, self.c, shortcut=shortcut) for _ in range(n)))
+
+    def forward(self, x):
+        return self.cv2(self.m(self.cv1(x)))
+
