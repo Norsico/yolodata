@@ -2155,17 +2155,13 @@ class FrequencyGate(nn.Module):
             nn.SiLU()
         )
 
-    def forward(self, x_sem, x_detail):
-        # x_sem: 来自主干 P3 [B, 256, 80, 80]
-        # x_detail: 来自细节分支 [B, 128, 80, 80]
+    def forward(self, x):
+        # 🚀 关键修改: YOLO 传进来的是一个列表，我们手动解包
+        x_sem, x_detail = x 
         
-        # 生成门控 (Gate)
+        # 下面保持不变
         gate = self.gate_gen(x_sem)
-        
-        # 门控机制: 只保留语义位置对应的细节 (抑制背景树叶噪声)
         x_detail_clean = x_detail * gate
-        
-        # 拼接融合
         return self.fusion(torch.cat([x_sem, x_detail_clean], dim=1))
 
 # 如果之前的 HWD 代码删了，这里是一个极简版，直接加进去
