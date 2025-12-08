@@ -2185,3 +2185,83 @@ class HWD_Down(nn.Module):
         y = torch.cat([x00, x01, x10, x11], dim=1)
         return self.conv(y)
 
+
+# ==========================================
+# StarNet Core Modules (CVPR 2024)
+# Source: https://github.com/ma-xu/Rewrite-the-Stars
+# Adapted for YOLOv11 by User
+# ==========================================
+
+class Star_ConvBN(nn.Sequential):
+    """ 
+    StarNet 源码中的辅助类: Conv + BN (无激活函数)
+    """
+    def __init__(self, in_planes, out_planes, kernel_size=1, stride=1, padding=0, dilation=1, groups=1, with_bn=True):
+        super().__init__()
+        self.add_module('conv', nn.Conv2d(in_planes, out_planes, kernel_size, stride, padding, dilation, groups, bias=False))
+        if with_bn:
+            self.add_module('bn', nn.BatchNorm2d(out_planes))
+
+class StarBlock(nn.Module):
+    """
+    StarBlock: The core unit of StarNet.
+    Structure: DWConv -> F1/F2 (Expansion) -> Star Operation -> G (Reduction) -> DWConv2
+    """
+    def __init__(self, dim, mlp_ratio=3, drop_path=0.):
+        super().__init__()
+        # 1. 第一个 DWConv (7x7), 负责大感受野空间聚合
+        self.dwconv = Star_ConvBN(dim, dim, 7, 1, (7 - 1) // 2, groups=dim, with_bn=True)
+        
+        # 2. 两个 1x1 卷积负责通道扩展 (类似 Transformer 的 FFN 扩展)
+        self.f1 = Star_ConvBN(dim, mlp_ratio * dim, 1, with_bn=False)
+        self.f2 = Star_ConvBN(dim, mlp_ratio * dim, 1, with_bn=False)
+        
+        # 3. 降维投影 1x1
+        self.g = Star_ConvBN(mlp_ratio * dim, dim, 1, with_bn=True)
+        
+        # 4. 第二个 DWConv (7x7), 在降维后再次提取特征 (这是 StarNet 的独特之处)
+        self.dwconv2 = Star_ConvBN(dim, dim, 7, 1, (7 - 1) // 2, groups=dim, with_bn=False)
+        
+        # 5. 激活函数 (ReLU6)
+        self.act = nn.ReLU6()
+        
+        # Nano 模型一般不需要 stochastic depth，直接用 Identity
+        self.drop_path = nn.Identity()
+
+    def forward(self, x):
+        input = x
+        x = self.dwconv(x)
+        
+        # --- Star Operation Start ---
+        x1, x2 = self.f1(x), self.f2(x)
+        # 核心创新: 元素级乘法将特征映射到高维隐式空间
+        x = self.act(x1) * x2 
+        # --- Star Operation End ---
+        
+        x = self.dwconv2(self.g(x))
+        x = input + self.drop_path(x)
+        return x
+
+class C2f_Star(nn.Module):
+    """
+    YOLO Wrapper for StarBlock.
+    替换原本的 C3k2 或 C2f，用于 Backbone。
+    """
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__()
+        self.c = int(c2 * e) # hidden channels
+        #以此对齐 YOLO 的 bottleneck 设计
+        self.cv1 = nn.Conv2d(c1, 2 * self.c, 1, 1, bias=False)
+        self.cv2 = nn.Conv2d((2 + n) * self.c, c2, 1) 
+        
+        # 堆叠 n 个 StarBlock
+        # 注意: StarBlock 的 mlp_ratio 源码默认为 3 或 4。
+        # 为了控制参数量，我们在 Nano 模型上可以使用 3 (源码中 starnet_s1 使用的是 3)
+        self.m = nn.ModuleList(StarBlock(self.c, mlp_ratio=3) for _ in range(n))
+
+    def forward(self, x):
+        # 模仿 C2f 的梯度流逻辑: Split -> Bottles -> Concat
+        y = list(self.cv1(x).chunk(2, 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
+

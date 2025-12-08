@@ -74,7 +74,8 @@ from ultralytics.nn.modules import (
     SPDConv,
     FrequencyGate,
     HWD_Down,
-    ScConv
+    ScConv,
+    C2f_Star
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -1563,7 +1564,8 @@ def parse_model(d, ch, verbose=True):
             ScConv_Down,
             SPDConv,
             HWD_Down,
-            ScConv
+            ScConv,
+            C2f_Star
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments

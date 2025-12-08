@@ -64,7 +64,8 @@ from .block import (
     SPDConv,
     FrequencyGate,
     HWD_Down,
-    ScConv
+    ScConv,
+    C2f_Star
 )
 from .conv import (
     CBAM,
@@ -193,4 +194,5 @@ __all__ = (
     "FrequencyGate",
     "HWD_Down",
     "ScConv",
+    "C2f_Star",
 )
