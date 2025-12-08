@@ -2126,7 +2126,7 @@ class SPDConv(nn.Module):
         x = self.act(self.bn(x))
         return x
 
-from ultralytics.nn.modules import DySample
+# from .conv import DySample
 
 class FrequencyGate(nn.Module):
     """
