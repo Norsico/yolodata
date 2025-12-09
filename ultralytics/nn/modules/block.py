@@ -2498,3 +2498,69 @@ class HFD_Down(nn.Module):
         # 步骤 3: 对边缘进行下采样
         return self.diff_conv(x_high)
 
+
+import torch
+from torch import nn
+from einops import rearrange # 必须确保安装了 einops
+
+# ==========================================
+# RFAConv: Receptive-Field Attention Convolution
+# Source: Provided by user (Based on Group Conv implementation)
+# ==========================================
+
+class RFAConv(nn.Module):
+    """
+    基于 Group Conv 的 RFAConv
+    作用: 替代 ScConv，对特征进行"注意力加权"清洗，而不仅仅是空间重组。
+    """
+    def __init__(self, in_channel, out_channel, kernel_size=3, stride=1):
+        super().__init__()
+        self.kernel_size = kernel_size
+
+        # 1. 获取权重 (通过 AvgPool 快速聚合感受野信息)
+        self.get_weight = nn.Sequential(
+            nn.AvgPool2d(kernel_size=kernel_size, padding=kernel_size // 2, stride=stride),
+            nn.Conv2d(in_channel, in_channel * (kernel_size ** 2), kernel_size=1, groups=in_channel, bias=False)
+        )
+        
+        # 2. 生成特征 (通过 Group Conv 提取空间特征)
+        self.generate_feature = nn.Sequential(
+            nn.Conv2d(in_channel, in_channel * (kernel_size ** 2), kernel_size=kernel_size, padding=kernel_size // 2, stride=stride, groups=in_channel, bias=False),
+            nn.BatchNorm2d(in_channel * (kernel_size ** 2)),
+            nn.ReLU()
+        )
+        
+        # 3. 最终融合卷积 (将加权后的特征融合回 out_channel)
+        # 注意：这里的 stride=kernel_size 是配合后面的 rearrange 这种 PixelShuffle 逆操作使用的
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channel, out_channel, kernel_size=kernel_size, stride=kernel_size),
+            nn.BatchNorm2d(out_channel),
+            nn.SiLU() # YOLO 默认通常用 SiLU，原代码是 ReLU，建议改 SiLU 保持统一
+        )
+
+    def forward(self, x):
+        b, c = x.shape[0:2]
+        
+        # 计算注意力权重
+        weight = self.get_weight(x)
+        h, w = weight.shape[2:]
+        # [B, C*K^2, H, W] -> Softmax -> Attention Map
+        weighted = weight.view(b, c, self.kernel_size ** 2, h, w).softmax(2)
+        
+        # 生成基础特征
+        feature = self.generate_feature(x).view(b, c, self.kernel_size ** 2, h, w)
+        
+        # 加权
+        weighted_data = feature * weighted
+        
+        # 核心魔法: 重排维度 (类似于把特征图放大 K 倍，然后用 stride=K 的卷积卷回去)
+        # 这步操作等价于在超分辨率空间做注意力
+        conv_data = rearrange(
+            weighted_data, 
+            'b c (n1 n2) h w -> b c (h n1) (w n2)', 
+            n1=self.kernel_size, 
+            n2=self.kernel_size
+        )
+        
+        return self.conv(conv_data)
+

@@ -69,6 +69,7 @@ from .block import (
     C3_Faster,
     LSK_FrequencyGate,
     HFD_Down,
+    RFAConv,
 )
 from .conv import (
     CBAM,
@@ -201,4 +202,5 @@ __all__ = (
     "C3_Faster",
     "LSK_FrequencyGate",
     "HFD_Down",
+    "RFAConv",
 )
