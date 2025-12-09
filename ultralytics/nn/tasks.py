@@ -81,6 +81,7 @@ from ultralytics.nn.modules import (
     HFD_Down,
     RFAConv,
     C2f_GhostV3,
+    SGEFusion
 )
     
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
@@ -1633,6 +1634,24 @@ def parse_model(d, ch, verbose=True):
             if m is C2fCIB:
                 legacy = False
         
+        # ================== SGEFusion 解析逻辑 ==================
+        elif m is SGEFusion:
+            # f 是来源层列表，例如 [16, 17] -> [P3, Detail]
+            # args 是 YAML 里的参数，例如 [64, 256]
+            
+            # 1. 自动获取真实的输入通道数
+            c_sem = ch[f[0]]     # P3 (Semantic) 的通道数 (例如 256)
+            c_detail = ch[f[1]]  # Detail 分支的通道数 (例如 64)
+            
+            # 2. 重组参数传给 __init__
+            # SGEFusion 的 __init__ 定义是: def __init__(self, c_sem, c_detail):
+            args = [c_sem, c_detail]
+            
+            # 3. 设定输出通道数
+            # SGEFusion 的输出是 x_sem + detail，所以输出通道数等于 c_sem
+            c2 = c_sem
+        # ===================================================================
+
         # ================== LSK_FrequencyGate / FrequencyGate 解析逻辑 ==================
         # 只要在这个集合里，都走同一套解析流程
         elif m in {FrequencyGate, LSK_FrequencyGate}:

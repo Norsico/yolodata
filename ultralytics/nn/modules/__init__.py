@@ -71,6 +71,7 @@ from .block import (
     HFD_Down,
     RFAConv,
     C2f_GhostV3,
+    SGEFusion
 )
 from .conv import (
     CBAM,
@@ -205,4 +206,5 @@ __all__ = (
     "HFD_Down",
     "RFAConv",
     "C2f_GhostV3",
+    "SGEFusion",
 )

@@ -2687,3 +2687,85 @@ class C2f_GhostV3(nn.Module):
         y = list(self.cv1(x).chunk(2, 1))
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
+
+# ==========================================
+# SGE-Fusion: Semantic-Guided Edge Fusion
+# Custom Design for Small Object Detection (SODA10M)
+# ==========================================
+
+from .conv import DySample
+
+class SGEFusion(nn.Module):
+    """
+    SGEFusion 模块: 
+    不只是简单的把 P2 和 P3 拼起来，而是计算 "P2 里有哪些细节是 P3 没看清的"。
+    
+    流程:
+    1. Sem_Up = DySample(P3) -> 把语义图放大，模拟高分辨率。
+    2. Residual = P2 - Sem_Up -> 物理减法！剩下的就是"被遗漏的边缘/纹理"。
+    3. Mask = Sigmoid(Sem_Up) -> 用语义图生成注意力，告诉网络"只关注车身上的纹理，别看树叶"。
+    4. Refined_Detail = Residual * Mask -> 过滤噪声。
+    5. Detail_Down = HWD(Refined_Detail) -> 用小波把这些宝贵的细节无损压回 P3 尺度。
+    6. Out = P3 + Detail_Down -> 融合。
+    """
+    def __init__(self, c_sem, c_detail):
+        super().__init__()
+        
+        # 1. 语义上采样对齐 (利用 DySample 的强重建能力)
+        self.dysample = DySample(c_sem, style='lp')
+        
+        # 2. 通道对齐 (把 P3 的语义通道映射到 P2 的细节通道，方便做减法)
+        self.sem_align = nn.Sequential(
+            nn.Conv2d(c_sem, c_detail, 1, 1, bias=False),
+            nn.BatchNorm2d(c_detail)
+        )
+        
+        # 3. 语义门控生成器
+        self.gate_gen = nn.Sequential(
+            nn.Conv2d(c_detail, c_detail, 1),
+            nn.Sigmoid()
+        )
+        
+        # 4. HWD 下采样 (把提取到的高频差分压回去)
+        # 这里集成 HWD 逻辑
+        self.hwd_conv = nn.Sequential(
+            nn.Conv2d(c_detail * 4, c_sem, 1, bias=False), # 4倍通道是因为 Haar 变换
+            nn.BatchNorm2d(c_sem),
+            nn.SiLU()
+        )
+        
+        # 5. 最终融合权重
+        self.fusion_weight = nn.Parameter(torch.ones(1, c_sem, 1, 1) * 0.5, requires_grad=True)
+
+    def forward(self, x):
+        # x 是列表: [P3(Semantic), P2(Detail)]
+        x_sem, x_detail = x
+        
+        # --- Step 1: 对齐 ---
+        # 把 P3 放大，试图去"解释" P2
+        x_sem_up = self.dysample(x_sem)
+        x_sem_aligned = self.sem_align(x_sem_up)
+        
+        # --- Step 2: 差分计算 (核心创新) ---
+        # 细节流 - 语义流 = 纯粹的纹理/边缘残差
+        # 这一步物理上消除了大面积的背景干扰
+        x_residual = x_detail - x_sem_aligned
+        
+        # --- Step 3: 语义过滤 ---
+        # 生成门控：P3 认为这里是物体的地方，我们才保留残差
+        gate = self.gate_gen(x_sem_aligned)
+        x_refined = x_residual * gate
+        
+        # --- Step 4: HWD 回填 ---
+        # Haar 小波变换
+        x00 = x_refined[:, :, 0::2, 0::2]
+        x01 = x_refined[:, :, 0::2, 1::2]
+        x10 = x_refined[:, :, 1::2, 0::2]
+        x11 = x_refined[:, :, 1::2, 1::2]
+        x_hwd = torch.cat([x00, x01, x10, x11], dim=1)
+        
+        x_detail_down = self.hwd_conv(x_hwd)
+        
+        # --- Step 5: 融合 ---
+        return x_sem + x_detail_down * self.fusion_weight
+
