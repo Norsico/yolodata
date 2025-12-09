@@ -81,7 +81,8 @@ from ultralytics.nn.modules import (
     HFD_Down,
     RFAConv,
     C2f_GhostV3,
-    SGEFusion
+    SGEFusion,
+    C2_Focal,
 )
     
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
@@ -1576,7 +1577,8 @@ def parse_model(d, ch, verbose=True):
             C3_Faster,
             HFD_Down,
             RFAConv,
-            C2f_GhostV3
+            C2f_GhostV3,
+            C2_Focal
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments

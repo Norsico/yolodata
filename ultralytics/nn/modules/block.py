@@ -2769,3 +2769,89 @@ class SGEFusion(nn.Module):
         # --- Step 5: 融合 ---
         return x_sem + x_detail_down * self.fusion_weight
 
+
+# ==========================================
+# C2_Focal: Focal Modulation for YOLOv11
+# Inspired by FocalNet (NeurIPS 2022)
+# ==========================================
+
+class FocalModulation(nn.Module):
+    """
+    焦点调制模块 (Focal Modulation)
+    作用: 替代 Self-Attention 或 PSA。
+    逻辑: 通过层级化的 Depthwise Conv 提取不同范围的上下文，然后聚合调制。
+    """
+    def __init__(self, dim, focal_window=3, focal_level=2, focal_factor=2):
+        super().__init__()
+        self.dim = dim
+        self.focal_level = focal_level
+        self.focal_window = focal_window
+        self.project_in = nn.Conv2d(dim, dim, 1, 1)
+        self.act = nn.GELU()
+
+        # 1. 层级上下文提取器 (Hierarchical Contextualization)
+        # 用堆叠的 DWConv 模拟不同大小的感受野 (3x3, 5x5...)
+        self.focal_layers = nn.ModuleList()
+        for k in range(focal_level):
+            kernel_size = focal_factor * k + focal_window
+            self.focal_layers.append(
+                nn.Sequential(
+                    nn.Conv2d(dim, dim, kernel_size, 1, kernel_size//2, groups=dim, bias=False),
+                    nn.BatchNorm2d(dim), # 加上BN训练更稳
+                    nn.GELU()
+                )
+            )
+            
+        # 2. 上下文聚合 (Global Context Aggregation)
+        # 既然是 P5 层，加一个全局平均池化来捕捉全局语义
+        self.global_context = nn.AdaptiveAvgPool2d(1)
+        
+        # 3. 调制器 (Modulator)
+        # 将聚合后的上下文映射为门控权重
+        self.project_out = nn.Conv2d(dim, dim, 1, 1)
+
+    def forward(self, x):
+        # x: [B, C, H, W]
+        x_proj = self.project_in(x)
+        res = []
+        
+        # 提取不同范围的上下文
+        x_out = x_proj
+        for layer in self.focal_layers:
+            x_out = layer(x_out)
+            res.append(x_out)
+        
+        # 加入全局上下文
+        global_ctx = self.global_context(x_proj)
+        res.append(global_ctx)
+        
+        # 聚合所有上下文 (简单相加，或者可以用 Conv 融合)
+        ctx_sum = sum(res)
+        
+        # 生成调制权重
+        modulator = torch.sigmoid(self.project_out(ctx_sum))
+        
+        # 焦点调制: 原特征 * 上下文权重
+        return x * modulator
+
+class C2_Focal(nn.Module):
+    """
+    YOLO Wrapper: C2 Block with Focal Modulation
+    替代 C2PSA
+    """
+    def __init__(self, c1, c2, n=1, e=0.5):
+        super().__init__()
+        assert c1 == c2
+        self.c = int(c1 * e)
+        self.cv1 = nn.Conv2d(c1, 2 * self.c, 1, 1, bias=False)
+        self.cv2 = nn.Conv2d(2 * self.c, c1, 1, 1, bias=False)
+        
+        # 这里的 m 就是 Focal Modulation 模块
+        # 我们堆叠 n 个 FocalBlock (通常 P5 层 n=1 就够了)
+        self.m = nn.Sequential(*(FocalModulation(self.c) for _ in range(n)))
+
+    def forward(self, x):
+        # 模仿 C2PSA 的逻辑: Split -> Focal -> Concat
+        a, b = self.cv1(x).split((self.c, self.c), dim=1)
+        b = self.m(b)
+        return self.cv2(torch.cat((a, b), 1))
