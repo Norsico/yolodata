@@ -70,6 +70,7 @@ from .block import (
     LSK_FrequencyGate,
     HFD_Down,
     RFAConv,
+    C2f_GhostV3,
 )
 from .conv import (
     CBAM,
@@ -203,4 +204,5 @@ __all__ = (
     "LSK_FrequencyGate",
     "HFD_Down",
     "RFAConv",
+    "C2f_GhostV3",
 )

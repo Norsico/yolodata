@@ -80,6 +80,7 @@ from ultralytics.nn.modules import (
     LSK_FrequencyGate,
     HFD_Down,
     RFAConv,
+    C2f_GhostV3,
 )
     
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
@@ -1573,7 +1574,8 @@ def parse_model(d, ch, verbose=True):
             C2f_Star,
             C3_Faster,
             HFD_Down,
-            RFAConv
+            RFAConv,
+            C2f_GhostV3
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments

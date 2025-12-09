@@ -2564,3 +2564,125 @@ class RFAConv(nn.Module):
         
         return self.conv(conv_data)
 
+
+# ==========================================
+# GhostNetV3 (Rep-Ghost) Core Modules
+# Source: Provided by user (Original Huawei implementation)
+# Adapted for YOLOv11 by User
+# ==========================================
+
+class GhostModuleV3(nn.Module):
+    def __init__(self, inp, oup, kernel_size=1, ratio=2, dw_size=3, stride=1, relu=True, mode='ori'):
+        super().__init__()
+        self.mode = mode
+        self.oup = oup
+        init_channels = math.ceil(oup / ratio)
+        new_channels = init_channels * (ratio - 1)
+        self.infer_mode = False
+
+        # --- Training Mode Branches ---
+        # 1. Primary Branch (主卷积)
+        self.primary_conv = nn.Sequential(
+            nn.Conv2d(inp, init_channels, kernel_size, stride, kernel_size//2, bias=False),
+            nn.BatchNorm2d(init_channels),
+            nn.ReLU(inplace=True) if relu else nn.Identity()
+        )
+
+        # 2. Cheap Operation (廉价变换)
+        self.cheap_operation = nn.Sequential(
+            nn.Conv2d(init_channels, new_channels, dw_size, 1, dw_size//2, groups=init_channels, bias=False),
+            nn.BatchNorm2d(new_channels),
+            nn.ReLU(inplace=True) if relu else nn.Identity()
+        )
+
+        # 3. ShortConv (GhostV3 的核心创新：Reparameterization 分支)
+        # 仅在 stride=1 时启用复杂分支，用于增强特征
+        if self.mode == 'rep':
+            self.short_conv = nn.Sequential(
+                nn.Conv2d(inp, oup, kernel_size, stride, kernel_size//2, bias=False),
+                nn.BatchNorm2d(oup),
+                nn.Conv2d(oup, oup, kernel_size=(1, 5), stride=1, padding=(0, 2), groups=oup, bias=False),
+                nn.BatchNorm2d(oup),
+                nn.Conv2d(oup, oup, kernel_size=(5, 1), stride=1, padding=(2, 0), groups=oup, bias=False),
+                nn.BatchNorm2d(oup),
+            )
+
+    def forward(self, x):
+        # 推理模式：直接使用融合后的卷积 (尚未实现融合逻辑简化版，直接走前向)
+        # 为了保证训练稳定性，这里我们保留训练态逻辑
+        
+        # 1. 生成 Intrinsic Features
+        x1 = self.primary_conv(x)
+        
+        # 2. 生成 Ghost Features
+        x2 = self.cheap_operation(x1)
+        
+        # 3. 拼接
+        out = torch.cat([x1, x2], dim=1)
+        res = out[:, :self.oup, :, :] # 裁剪到目标通道
+        
+        # 4. 叠加 Rep 分支 (仅在训练且 mode='rep' 时)
+        if self.mode == 'rep' and hasattr(self, 'short_conv'):
+            # GhostV3 这里的逻辑是将 Rep 分支的特征加到结果上
+            # 注意：原代码的逻辑比较复杂，这里简化为特征增强
+            res = res + self.short_conv(F.avg_pool2d(x, kernel_size=1, stride=1)) # 简化 stride 适配
+            
+        return res
+
+class GhostBottleneckV3(nn.Module):
+    """ GhostNetV3 Bottleneck """
+    def __init__(self, c1, c2, k=3, s=1):
+        super().__init__()
+        c_ = c2 // 2 # hidden channels
+        
+        # 第一层 GhostModule 使用 'rep' 模式增强特征 (V3 特性)
+        self.ghost1 = GhostModuleV3(c1, c_, relu=True, mode='rep')
+        
+        # Depthwise Conv (如果 stride > 1)
+        if s > 1:
+            self.conv_dw = nn.Sequential(
+                nn.Conv2d(c_, c_, k, s, k//2, groups=c_, bias=False),
+                nn.BatchNorm2d(c_)
+            )
+        else:
+            self.conv_dw = None
+
+        # 第二层 GhostModule 使用普通模式 (还原通道)
+        self.ghost2 = GhostModuleV3(c_, c2, relu=False, mode='ori')
+        
+        # Shortcut
+        if c1 == c2 and s == 1:
+            self.shortcut = nn.Identity()
+        else:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(c1, c1, k, s, k//2, groups=c1, bias=False),
+                nn.BatchNorm2d(c1),
+                nn.Conv2d(c1, c2, 1, 1, 0, bias=False),
+                nn.BatchNorm2d(c2)
+            )
+
+    def forward(self, x):
+        y = self.ghost1(x)
+        
+        if self.conv_dw is not None:
+            y = self.conv_dw(y)
+            
+        y = self.ghost2(y)
+        return y + self.shortcut(x)
+
+class C2f_GhostV3(nn.Module):
+    """
+    YOLO Wrapper: C2f with GhostNetV3
+    """
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__()
+        self.c = int(c2 * e)
+        self.cv1 = nn.Conv2d(c1, 2 * self.c, 1, 1, bias=False)
+        self.cv2 = nn.Conv2d((2 + n) * self.c, c2, 1)
+        # 堆叠 GhostBottleneckV3
+        self.m = nn.ModuleList(GhostBottleneckV3(self.c, self.c) for _ in range(n))
+
+    def forward(self, x):
+        y = list(self.cv1(x).chunk(2, 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
