@@ -2369,3 +2369,132 @@ class C3_Faster(nn.Module):
     def forward(self, x):
         return self.cv2(self.m(self.cv1(x)))
 
+
+# ==========================================
+# LSKNet Core Modules (ICCV 2023)
+# Adapted for YOLOv11 by User
+# ==========================================
+
+class LSKBlock(nn.Module):
+    """
+    Large Selective Kernel Block
+    核心作用: 动态调整感受野，解决"侧面像自行车"的歧义问题。
+    """
+    def __init__(self, dim):
+        super().__init__()
+        # 1. 大核卷积序列 (Large Kernel Sequence)
+        # 5x5 Depthwise
+        self.conv0 = nn.Conv2d(dim, dim, 5, padding=2, groups=dim)
+        # 7x7 Depthwise with Dilation=3 -> 感受野极大扩大
+        self.conv_spatial = nn.Conv2d(dim, dim, 7, stride=1, padding=9, groups=dim, dilation=3)
+        
+        # 2. 通道混合与注意力生成
+        self.conv1 = nn.Conv2d(dim, dim//2, 1)
+        self.conv2 = nn.Conv2d(dim, dim//2, 1)
+        
+        # 3. 空间注意力挤压 (Squeeze)
+        self.conv_squeeze = nn.Conv2d(2, 2, 7, padding=3)
+        self.conv = nn.Conv2d(dim//2, dim, 1)
+
+    def forward(self, x):   
+        # 提取不同尺度的空间特征
+        attn1 = self.conv0(x)
+        attn2 = self.conv_spatial(attn1)
+
+        # 降维准备融合
+        attn1_split = self.conv1(attn1)
+        attn2_split = self.conv2(attn2)
+        
+        # 生成空间注意力图
+        attn = torch.cat([attn1_split, attn2_split], dim=1)
+        avg_attn = torch.mean(attn, dim=1, keepdim=True)
+        max_attn, _ = torch.max(attn, dim=1, keepdim=True)
+        agg = torch.cat([avg_attn, max_attn], dim=1)
+        
+        # 计算选择权重 (Sigmoid)
+        sig = self.conv_squeeze(agg).sigmoid()
+        
+        # 动态加权融合 (Dynamic Selection)
+        attn = attn1_split * sig[:,0,:,:].unsqueeze(1) + attn2_split * sig[:,1,:,:].unsqueeze(1)
+        
+        # 恢复通道
+        attn = self.conv(attn)
+        return x * attn
+
+class LSK_FrequencyGate(nn.Module):
+    """
+    升级版的门控模块: 使用 LSKBlock 替代普通的 Conv1x1
+    作用: 在决定"要不要这个细节"之前，先用大感受野看清楚"这到底是个啥"。
+    """
+    def __init__(self, c_sem, c_detail, c_out):
+        super().__init__()
+        # 1. 语义特征增强器 (用 LSK 看大范围上下文)
+        self.sem_process = nn.Sequential(
+            nn.Conv2d(c_sem, c_sem, 1), # 先整理通道
+            nn.BatchNorm2d(c_sem),
+            nn.SiLU(),
+            LSKBlock(c_sem) # <--- 核心猛料
+        )
+        
+        # 2. 门控生成 (将语义特征映射为 Gate Mask)
+        self.gate_gen = nn.Sequential(
+            nn.Conv2d(c_sem, c_detail, 1),
+            nn.Sigmoid()
+        )
+        
+        # 3. 融合层
+        self.fusion = nn.Sequential(
+            nn.Conv2d(c_sem + c_detail, c_out, 1, bias=False),
+            nn.BatchNorm2d(c_out),
+            nn.SiLU()
+        )
+
+    def forward(self, x):
+        # 解包输入
+        x_sem, x_detail = x
+        
+        # 1. 用 LSK 增强语义流 (解决歧义)
+        x_sem_enhanced = self.sem_process(x_sem)
+        
+        # 2. 生成门控
+        gate = self.gate_gen(x_sem_enhanced)
+        
+        # 3. 过滤细节流
+        x_detail_clean = x_detail * gate
+        
+        # 4. 融合
+        return self.fusion(torch.cat([x_sem, x_detail_clean], dim=1))
+
+
+class HFD_Down(nn.Module):
+    """
+    High-Frequency Difference Downsampling (HFD_Down)
+    核心创新: 
+    1. 利用 AvgPool 模拟"低频背景"。
+    2. 利用 Subtraction (减法) 提取"高频边缘" (即 High = Original - Low)。
+    3. 仅对高频信息进行卷积下采样，强制网络关注三轮车的骨架纹理，忽略路面背景。
+    """
+    def __init__(self, c1, c2, k=3, s=2):
+        super().__init__()
+        # 1. 局部平均 (模拟低频信息) - 不改变尺寸
+        self.avg_smooth = nn.AvgPool2d(kernel_size=3, stride=1, padding=1)
+        
+        # 2. 差分卷积 (处理高频信息)
+        # 输入是 (x - x_smooth)，即纯边缘信息
+        self.diff_conv = nn.Sequential(
+            nn.Conv2d(c1, c2, kernel_size=k, stride=s, padding=k//2, bias=False),
+            nn.BatchNorm2d(c2),
+            nn.SiLU()
+        )
+
+    def forward(self, x):
+        # 步骤 1: 计算低频背景 (平滑)
+        x_low = self.avg_smooth(x)
+        
+        # 步骤 2: 提取高频细节 (原图 - 背景 = 边缘/纹理)
+        # 这一步相当于某种"Learnable Sobel"，但比 Sobel 更鲁棒
+        x_high = x - x_low 
+        
+        # 步骤 3: 对边缘进行下采样
+        return self.diff_conv(x_high)
+

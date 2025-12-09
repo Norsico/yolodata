@@ -76,8 +76,11 @@ from ultralytics.nn.modules import (
     HWD_Down,
     ScConv,
     C2f_Star,
-    C3_Faster
+    C3_Faster,
+    LSK_FrequencyGate,
+    HFD_Down,
 )
+    
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
 from ultralytics.utils.loss import (
@@ -1567,7 +1570,8 @@ def parse_model(d, ch, verbose=True):
             HWD_Down,
             ScConv,
             C2f_Star,
-            C3_Faster
+            C3_Faster,
+            HFD_Down
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments
@@ -1625,14 +1629,15 @@ def parse_model(d, ch, verbose=True):
             if m is C2fCIB:
                 legacy = False
         
-        # ================== FrequencyGate 逻辑 ==================
-        elif m is FrequencyGate:
-            # f 是来源层列表，例如 [-1, 17] -> 对应索引 [16, 18]
-            # args 是 YAML 里的参数，例如 [128, 256] -> [c_detail, c_out]
+        # ================== LSK_FrequencyGate / FrequencyGate 解析逻辑 ==================
+        # 只要在这个集合里，都走同一套解析流程
+        elif m in {FrequencyGate, LSK_FrequencyGate}:
+            # f 是来源层列表，例如 [16, 18]
+            # args 是 YAML 里的参数，例如 [128, 256] -> [c_detail_hint, c_out]
             
-            # 1. 获取两个输入层的通道数
-            c_sem = ch[f[0]]     # 主语义流 (P3) 通道数
-            c_detail = ch[f[1]]  # 细节流 (Detail) 通道数
+            # 1. 自动从 ch 列表中获取真实的输入通道数 (比 YAML 写的更准)
+            c_sem = ch[f[0]]     # 主语义流 (P3) 真实通道数
+            c_detail = ch[f[1]]  # 细节流 (Detail) 真实通道数
             
             # 2. 获取输出通道数 (YAML 中第二个参数)
             c_out = args[1]
@@ -1642,7 +1647,7 @@ def parse_model(d, ch, verbose=True):
             
             # 4. 更新当前层的输出通道数 c2，供下一层使用
             c2 = c_out
-        # =========================================================
+        # ==============================================================================
 
 
         elif m is AIFI:
