@@ -2855,3 +2855,74 @@ class C2_Focal(nn.Module):
         a, b = self.cv1(x).split((self.c, self.c), dim=1)
         b = self.m(b)
         return self.cv2(torch.cat((a, b), 1))
+
+
+class CSI_Fusion(nn.Module):
+    """
+    Cross-Scale Interactive Fusion (CSI-Fusion)
+    核心创新: 打破 P3/P4/P5 的独立性，在 Detect 之前进行一次轻量级的全互联。
+    解决痛点: 中等难度样本在不同尺度间被漏检的问题。
+    """
+    def __init__(self, ch_list): # ch_list: [c_p3, c_p4, c_p5]
+        super().__init__()
+        # 统一通道数，为了方便交互 (取中间值 256 或 128)
+        self.inter_dim = 256 
+        
+        # 1. 投影层 (适配输入通道)
+        self.projs = nn.ModuleList([
+            nn.Conv2d(c, self.inter_dim, 1, 1, bias=False) for c in ch_list
+        ])
+        
+        # 2. 交互核心 (Shared Convolution)
+        # 用一个共享的卷积核处理所有尺度的特征，迫使网络学习尺度不变性
+        self.shared_conv = nn.Sequential(
+            nn.Conv2d(self.inter_dim, self.inter_dim, 3, 1, 1, groups=self.inter_dim, bias=False), # DW
+            nn.BatchNorm2d(self.inter_dim),
+            nn.SiLU(),
+            nn.Conv2d(self.inter_dim, self.inter_dim, 1, 1, bias=False) # PW
+        )
+        
+        # 3. 输出恢复 (把通道数变回原来的，方便 Detect 头接手)
+        self.restores = nn.ModuleList([
+            nn.Conv2d(self.inter_dim, c, 1, 1, bias=False) for c in ch_list
+        ])
+        
+        # 上采样/下采样工具
+        self.up = nn.Upsample(scale_factor=2)
+        self.down = nn.MaxPool2d(2)
+
+    def forward(self, x):
+        # x: [P3, P4, P5]
+        p3, p4, p5 = x
+        
+        # 1. 投影
+        f3 = self.projs[0](p3)
+        f4 = self.projs[1](p4)
+        f5 = self.projs[2](p5)
+        
+        # 2. 交互 (Interactive)
+        # 核心逻辑: 
+        # P3_new = P3 + Up(P4)
+        # P4_new = P4 + Down(P3) + Up(P5)
+        # P5_new = P5 + Down(P4)
+        
+        # P4 向 P3 注入语义
+        f3_out = f3 + self.up(f4)
+        
+        # P3 向 P4 注入细节, P5 向 P4 注入语义
+        f4_out = f4 + self.down(f3) + self.up(f5)
+        
+        # P4 向 P5 注入细节
+        f5_out = f5 + self.down(f4)
+        
+        # 3. 共享卷积清洗 (特征对齐)
+        f3_out = self.shared_conv(f3_out)
+        f4_out = self.shared_conv(f4_out)
+        f5_out = self.shared_conv(f5_out)
+        
+        # 4. 恢复通道
+        out3 = self.restores[0](f3_out)
+        out4 = self.restores[1](f4_out)
+        out5 = self.restores[2](f5_out)
+        
+        return [out3, out4, out5]

@@ -83,6 +83,7 @@ from ultralytics.nn.modules import (
     C2f_GhostV3,
     SGEFusion,
     C2_Focal,
+    CSI_Fusion,
 )
     
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
@@ -1635,7 +1636,17 @@ def parse_model(d, ch, verbose=True):
                     args.extend((True, 1.2))
             if m is C2fCIB:
                 legacy = False
+
+
+        # ================== CSI_Fusion ==================
+        elif m is CSI_Fusion:
+            # f 是 [19, 22, 25] 这种来源层
+            # args 是 [] (不需要参数，内部自动计算)
+            c2 = [ch[x] for x in f] # 输出通道数等于输入通道数
+            args = [c2] # 传入通道列表
+        # ================================================
         
+
         # ================== SGEFusion 解析逻辑 ==================
         elif m is SGEFusion:
             # f 是来源层列表，例如 [16, 17] -> [P3, Detail]
@@ -1652,7 +1663,7 @@ def parse_model(d, ch, verbose=True):
             # 3. 设定输出通道数
             # SGEFusion 的输出是 x_sem + detail，所以输出通道数等于 c_sem
             c2 = c_sem
-        # ===================================================================
+        # ================================================
 
         # ================== LSK_FrequencyGate / FrequencyGate 解析逻辑 ==================
         # 只要在这个集合里，都走同一套解析流程
