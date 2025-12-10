@@ -13,7 +13,8 @@ from ultralytics.utils.ops import crop_mask, xywh2xyxy, xyxy2xywh
 from ultralytics.utils.tal import RotatedTaskAlignedAssigner, TaskAlignedAssigner, dist2bbox, dist2rbox, make_anchors
 from ultralytics.utils.torch_utils import autocast
 
-from .metrics import bbox_iou, probiou, nwd_loss, bbox_focal_shape_iou
+# from .metrics import bbox_iou, nwd_loss
+from .metrics import bbox_focal_shape_iou, probiou
 
 from .tal import bbox2dist
 
