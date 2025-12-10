@@ -128,15 +128,15 @@ class BboxLoss(nn.Module):
         """Compute IoU and DFL losses for bounding boxes."""
         weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
 
-        iou = bbox_focal_shape_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, scale=0.5, gamma=0.5, alpha=1.5)
+        # iou = bbox_focal_shape_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, scale=0.5, gamma=0.5, alpha=1.5)
 
-        loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
+        # loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
 
         # # --- 测试 ---
         # raise RuntimeError("DEBUG: Code reached the new IOU loss calculation! Value: " + str(loss_iou.item()))
         # ------------------
-        # iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
-        # loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
+        iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
+        loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
 
         # DFL loss
         if self.dfl_loss:
