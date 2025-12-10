@@ -13,7 +13,8 @@ from ultralytics.utils.ops import crop_mask, xywh2xyxy, xyxy2xywh
 from ultralytics.utils.tal import RotatedTaskAlignedAssigner, TaskAlignedAssigner, dist2bbox, dist2rbox, make_anchors
 from ultralytics.utils.torch_utils import autocast
 
-from .metrics import bbox_iou, probiou, nwd_loss
+from .metrics import bbox_iou, probiou, nwd_loss, bbox_focal_shape_iou
+
 from .tal import bbox2dist
 
 
@@ -125,8 +126,16 @@ class BboxLoss(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute IoU and DFL losses for bounding boxes."""
         weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
-        iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
+
+        iou = bbox_focal_shape_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, scale=0.5, gamma=0.5, alpha=1.5)
+
         loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
+
+        # --- 测试 ---
+        raise RuntimeError("DEBUG: Code reached the new IOU loss calculation! Value: " + str(loss_iou.item()))
+        # ------------------
+        # iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
+        # loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
 
         # DFL loss
         if self.dfl_loss:
