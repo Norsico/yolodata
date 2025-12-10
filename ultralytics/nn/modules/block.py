@@ -2926,3 +2926,80 @@ class CSI_Fusion(nn.Module):
         out5 = self.restores[2](f5_out)
         
         return [out3, out4, out5]
+
+
+class SDC_Gate(nn.Module):
+    """
+    SDC-Gate: Semantic-Detail Collaborative Gate
+    -------------------------------------------------------
+    核心创新: 解决"盲人指挥"问题。
+    旧 Gate: Mask = Func(P3) -> P3 分辨率低，看不清小目标，容易误杀细节。
+    新 Gate: Mask = Func(Concat(P3, P2)) -> 同时结合语义和细节来决定保留什么。
+    + 引入 Coordinate Attention 思想，强化对"位置"的敏感度。
+    """
+    def __init__(self, c_sem, c_detail, c_out):
+        super().__init__()
+        
+        # 1. 语义特征对齐 (先用 DySample 把 P3 放大，跟 P2 对齐)
+        self.dysample = DySample(c_sem, style='lp')
+        
+        # 2. 协同感知 (Collaborative Perception)
+        # 输入通道 = c_sem + c_detail
+        # 我们用 1x1 卷积融合信息，生成"协同特征"
+        self.collab_conv = nn.Sequential(
+            nn.Conv2d(c_sem + c_detail, c_out, 1, 1, bias=False),
+            nn.BatchNorm2d(c_out),
+            nn.SiLU()
+        )
+        
+        # 3. 空间-通道注意力生成 (类似 Coordinate Attention)
+        # 既然三轮车是长宽比敏感的，我们分别压缩 H 和 W 方向
+        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
+        self.pool_w = nn.AdaptiveAvgPool2d((1, None))
+        
+        self.gate_conv = nn.Conv2d(c_out, c_out, 1, 1, bias=False) # 共享权重
+        
+        # 4. 最终融合映射
+        self.fusion_conv = nn.Sequential(
+            nn.Conv2d(c_sem + c_detail, c_out, 1, 1, bias=False),
+            nn.BatchNorm2d(c_out),
+            nn.SiLU()
+        )
+
+    def forward(self, x):
+        # x: [P3 (Semantic), P2 (Detail)]
+        x_sem, x_detail = x
+        
+        # 1. 语义上采样 (对齐 P2 尺寸)
+        x_sem_up = self.dysample(x_sem)
+        
+        # 2. 拼接 (Concat) - 让 Gate 看到所有信息！
+        x_cat = torch.cat([x_sem_up, x_detail], dim=1)
+        
+        # 3. 生成协同特征
+        x_collab = self.collab_conv(x_cat)
+        
+        # 4. 计算注意力 Mask (Coordinate Attention 变体)
+        # 分别看 H 和 W 方向，解决长条形/非刚体目标注意力不集中的问题
+        x_h = self.pool_h(x_collab)
+        x_w = self.pool_w(x_collab).permute(0, 1, 3, 2)
+        
+        # 拼接后通过卷积提取注意力
+        y = torch.cat([x_h, x_w], dim=2)
+        y = self.gate_conv(y)
+        y = y.sigmoid() # 生成 0~1 的 Gate
+        
+        # 拆分回 H 和 W
+        h, w = x_collab.shape[2], x_collab.shape[3]
+        a_h, a_w = torch.split(y, [h, w], dim=2)
+        a_w = a_w.permute(0, 1, 3, 2)
+        
+        # 5. 生成最终的 2D Mask
+        gate_mask = a_h * a_w
+        
+        # 6. 门控过滤 (只对细节流做过滤，语义流保留)
+        # 逻辑: P3 是基础，P2 是补充。只补充"有用"的细节。
+        x_detail_refined = x_detail * gate_mask
+        
+        # 7. 最终融合
+        return self.fusion_conv(torch.cat([x_sem_up, x_detail_refined], dim=1))

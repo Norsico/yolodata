@@ -84,6 +84,7 @@ from ultralytics.nn.modules import (
     SGEFusion,
     C2_Focal,
     CSI_Fusion,
+    SDC_Gate,
 )
     
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
@@ -1579,7 +1580,7 @@ def parse_model(d, ch, verbose=True):
             HFD_Down,
             RFAConv,
             C2f_GhostV3,
-            C2_Focal
+            C2_Focal,
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments
@@ -1665,13 +1666,13 @@ def parse_model(d, ch, verbose=True):
             c2 = c_sem
         # ================================================
 
-        # ================== LSK_FrequencyGate / FrequencyGate 解析逻辑 ==================
-        # 只要在这个集合里，都走同一套解析流程
-        elif m in {FrequencyGate, LSK_FrequencyGate}:
-            # f 是来源层列表，例如 [16, 18]
+        # ================== SDC_Gate / FrequencyGate 通用解析逻辑 ==================
+        # 🚀 修改点: 把 SDC_Gate 加进这个集合 { ... } 里
+        elif m in {FrequencyGate, LSK_FrequencyGate, SDC_Gate}:
+            # f 是来源层列表，例如 [16, 17] -> [P3, Detail]
             # args 是 YAML 里的参数，例如 [128, 256] -> [c_detail_hint, c_out]
             
-            # 1. 自动从 ch 列表中获取真实的输入通道数 (比 YAML 写的更准)
+            # 1. 自动从 ch 列表中获取真实的输入通道数
             c_sem = ch[f[0]]     # 主语义流 (P3) 真实通道数
             c_detail = ch[f[1]]  # 细节流 (Detail) 真实通道数
             
@@ -1679,11 +1680,12 @@ def parse_model(d, ch, verbose=True):
             c_out = args[1]
             
             # 3. 重组参数传给 __init__(self, c_sem, c_detail, c_out)
+            # 这三个类的初始化参数顺序都是一样的，所以通用
             args = [c_sem, c_detail, c_out]
             
             # 4. 更新当前层的输出通道数 c2，供下一层使用
             c2 = c_out
-        # ==============================================================================
+        # =========================================================================
 
 
         elif m is AIFI:

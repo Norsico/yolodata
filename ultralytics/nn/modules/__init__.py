@@ -73,7 +73,8 @@ from .block import (
     C2f_GhostV3,
     SGEFusion,
     C2_Focal,
-    CSI_Fusion
+    CSI_Fusion,
+    SDC_Gate,
 )
 from .conv import (
     CBAM,
@@ -211,4 +212,5 @@ __all__ = (
     "SGEFusion",
     "C2_Focal",
     "CSI_Fusion",
+    "SDC_Gate",
 )
