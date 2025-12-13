@@ -1,13 +1,10 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 
-# FaRFA-Rep-YOLO (Fixed for Tricycle)
+# FaRFA-Rep-Plus-YOLO
 # --------------------------------------------------------
-# 针对 10k/640px 数据的最终修正版:
-# 1. 保留 RFAConv: 它贡献了 Pedestrian/Car/Cyclist 的巨大提升 (+2.2% mAP)。
-# 2. 移除 HWD/SPD: 它们是导致 Tricycle 掉点的元凶 (硬下采样破坏微小目标)。
-# 3. 引入 RepConv 下采样: 在 Detail 分支使用 RepConv(stride=2)。
-#    让网络"学会"如何保留三轮车特征，而不是被动被切分。
-# 4. 保留 Gate: 既然其他类别涨分了，说明 Gate 是有效的，只要输入特征够强，Gate 就能正确工作。
+# 策略: 
+# 1. Detail Branch 源头改为 Layer 2 (C3k2 输出)，特征更纯净。
+# 2. 下采样使用 RepConv，并显式指定 Padding=1 以修复报错。
 # --------------------------------------------------------
 
 # Parameters
@@ -15,11 +12,12 @@ nc: 6
 scales: 
   n: [0.50, 0.25, 1024] 
 
-# Backbone (C3k2 原生最稳，不动)
+# Backbone
 backbone:
   - [-1, 1, Conv, [64, 3, 2]] # 0
-  - [-1, 1, Conv, [128, 3, 2]] # 1-P2/4 (细节流源头)
-  - [-1, 2, C3k2, [256, False, 0.25]]
+  - [-1, 1, Conv, [128, 3, 2]] # 1-P2/4 (Raw)
+  - [-1, 2, C3k2, [256, False, 0.25]] # 2-P2/4 (Refined -> 最佳源头)
+
   - [-1, 1, Conv, [256, 3, 2]] # 3-P3/8
   - [-1, 2, C3k2, [512, False, 0.25]]
   - [-1, 1, Conv, [512, 3, 2]] # 5-P4/16
@@ -31,7 +29,7 @@ backbone:
 
 # Head
 head:
-  # === DySample 上采样 (保持不动，效果很好) ===
+  # === DySample ===
   - [-1, 1, DySample, [2, 'lp']] # 11
   - [[-1, 6], 1, Concat, [1]] 
   - [-1, 2, C3k2, [512, False]] # 13
@@ -40,21 +38,18 @@ head:
   - [[-1, 4], 1, Concat, [1]] 
   - [-1, 2, C3k2, [256, False]] # 16 (P3 语义流)
 
-  # === 🚀 [修正] Detail Branch (FaRFA-Rep) ===
-  # 输入: P2 (128通道, 160x160)
+  # === 🚀 [升级] Detail Branch ===
   
-  # 17: RFAConv (128 -> 128)
+  # 17: RFAConv 
+  # 来源: [2] (Backbone P2 的 C3k2 输出)
   - [2, 1, RFAConv, [128]] 
   
-  # 18: 🚀 RepConv 下采样 (替代 HWD/SPD)
-  # 参数: [out_ch, kernel, stride] -> [128, 3, 2]
-  # 逻辑: 用 RepConv 替代 HWD。RepConv 能在下采样时通过多分支训练，
-  # 强行保留住三轮车的特征强度，防止被 Gate 误杀。
-  - [-1, 1, RepConv, [128, 3, 2, 1]] # [out, k, s, p] -> 强制 p=1
+  # 18: RepConv 下采样
+  # 🚀 关键修复: 加上第4个参数 1 (Padding)
+  - [-1, 1, RepConv, [128, 3, 2, 1]] 
 
-  # === 频率门控融合 ===
-  # 19: 保持 FrequencyGate
-  # 现在 Layer 18 送来的是经过 RepConv 强化的特征，Gate 应该能识别出 Tricycle 了
+  # === Gate ===
+  # 19
   - [[16, 18], 1, FrequencyGate, [128, 256]] 
 
   # === 输出路径 ===
