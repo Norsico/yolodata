@@ -50,7 +50,7 @@ head:
   # 参数: [out_ch, kernel, stride] -> [128, 3, 2]
   # 逻辑: 用 RepConv 替代 HWD。RepConv 能在下采样时通过多分支训练，
   # 强行保留住三轮车的特征强度，防止被 Gate 误杀。
-  - [-1, 1, RepConv, [128, 3, 2]] 
+  - [-1, 1, RepConv, [128, 3, 2, 1]] # [out, k, s, p] -> 强制 p=1
 
   # === 频率门控融合 ===
   # 19: 保持 FrequencyGate
