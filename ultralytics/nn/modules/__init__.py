@@ -75,6 +75,9 @@ from .block import (
     C2_Focal,
     CSI_Fusion,
     SDC_Gate,
+    Dilated_Rep,
+    Semantic_Inject,
+
 )
 from .conv import (
     CBAM,
@@ -213,4 +216,6 @@ __all__ = (
     "C2_Focal",
     "CSI_Fusion",
     "SDC_Gate",
+    "Dilated_Rep",
+    "Semantic_Inject",
 )

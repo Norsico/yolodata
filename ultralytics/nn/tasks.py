@@ -85,6 +85,8 @@ from ultralytics.nn.modules import (
     C2_Focal,
     CSI_Fusion,
     SDC_Gate,
+    Dilated_Rep,
+    Semantic_Inject,
 )
     
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
@@ -1581,6 +1583,7 @@ def parse_model(d, ch, verbose=True):
             RFAConv,
             C2f_GhostV3,
             C2_Focal,
+            Dilated_Rep,
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments
@@ -1666,8 +1669,19 @@ def parse_model(d, ch, verbose=True):
             c2 = c_sem
         # ================================================
 
+        elif m is Semantic_Inject:
+            # f 是来源列表: [P2_High, P3_Low]
+            c_high = ch[f[0]]  # 获取 P2 流的通道数 (例如 64)
+            c_low = ch[f[1]]   # 获取 P3 流的通道数 (例如 256)
+            
+            # 这里的 args 实际上是 YAML 里的 [64, 256]，但为了稳健，
+            # 我们直接用 ch[] 推导出的真实值覆盖它
+            args = [c_high, c_low]
+            
+            # Semantic_Inject 的输出通道数等于 c_high (它把语义注入到了高分流中)
+            c2 = c_high
+
         # ================== SDC_Gate / FrequencyGate 通用解析逻辑 ==================
-        # 🚀 修改点: 把 SDC_Gate 加进这个集合 { ... } 里
         elif m in {FrequencyGate, LSK_FrequencyGate, SDC_Gate}:
             # f 是来源层列表，例如 [16, 17] -> [P3, Detail]
             # args 是 YAML 里的参数，例如 [128, 256] -> [c_detail_hint, c_out]

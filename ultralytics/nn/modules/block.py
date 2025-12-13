@@ -3002,3 +3002,84 @@ class SDC_Gate(nn.Module):
         
         # 6. 最终融合
         return self.fusion_conv(torch.cat([x_sem_up, x_detail_refined], dim=1))
+
+
+class Dilated_Rep(nn.Module):
+    """
+    Dilated Reparameterization Block
+    针对 Tricycle 设计: 
+    三轮车形状多变，普通 3x3 感受野太小。
+    我们用 d=1, d=2, d=3 的空洞卷积并行提取，既不降分辨率，又能看清长条形物体。
+    """
+    def __init__(self, c1, c2, k=3):
+        super().__init__()
+        # 1. 普通分支 (看局部细节)
+        self.conv_std = nn.Sequential(
+            nn.Conv2d(c1, c1, k, 1, k//2, groups=c1, bias=False),
+            nn.BatchNorm2d(c1)
+        )
+        
+        # 2. 空洞分支 d=2 (看中等范围，如整个车身)
+        self.conv_d2 = nn.Sequential(
+            nn.Conv2d(c1, c1, k, 1, padding=2, dilation=2, groups=c1, bias=False),
+            nn.BatchNorm2d(c1)
+        )
+        
+        # 3. 空洞分支 d=3 (看大范围，如车+人)
+        self.conv_d3 = nn.Sequential(
+            nn.Conv2d(c1, c1, k, 1, padding=3, dilation=3, groups=c1, bias=False),
+            nn.BatchNorm2d(c1)
+        )
+        
+        # 融合投影
+        self.act = nn.SiLU()
+        self.project = nn.Conv2d(c1, c2, 1, 1, bias=False)
+        self.bn = nn.BatchNorm2d(c2)
+
+    def forward(self, x):
+        # 多尺度感受野融合
+        y1 = self.conv_std(x)
+        y2 = self.conv_d2(x)
+        y3 = self.conv_d3(x)
+        
+        # 相加融合 (类似 RepVGG，训练时多分支，推理时理论上可融合但这里保持结构)
+        y = self.act(y1 + y2 + y3)
+        return self.act(self.bn(self.project(y)))
+
+class Semantic_Inject(nn.Module):
+    """
+    语义注入模块
+    作用: 把 P3/P4 的深层语义，无损地注入到 P2 高分流中。
+    解决"盲人"问题: 让 P2 知道"哪里大概率有车"，从而不被背景噪声干扰。
+    """
+    def __init__(self, c_high, c_low): # c_high=P2通道, c_low=P3通道
+        super().__init__()
+        # 1. 对低分语义进行上采样 (DySample 效果最好)
+        self.up = DySample(c_low, style='lp')
+        
+        # 2. 语义对齐
+        self.sem_conv = nn.Conv2d(c_low, c_high, 1, 1, bias=False)
+        
+        # 3. 注入机制 (Sigmoid Attention)
+        self.att_conv = nn.Sequential(
+            nn.Conv2d(c_high, c_high, 3, 1, 1, groups=c_high, bias=False), # Depthwise
+            nn.BatchNorm2d(c_high),
+            nn.Sigmoid()
+        )
+        
+        # 4. 最终融合
+        self.fusion = nn.Conv2d(c_high, c_high, 1, 1)
+
+    def forward(self, x):
+        x_p2, x_p3 = x # x_p2: 高分细节, x_p3: 低分语义
+        
+        # 语义上采样
+        feat_sem = self.sem_conv(self.up(x_p3))
+        
+        # 生成注入权重: 语义觉得重要的地方，权重就高
+        inject_map = self.att_conv(feat_sem)
+        
+        # 注入: 细节 * 语义权重 + 语义本身
+        out = x_p2 * inject_map + feat_sem
+        
+        return self.fusion(out)
