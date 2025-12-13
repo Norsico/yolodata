@@ -1,10 +1,13 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 
-# FaRFA-Rep-Plus-YOLO
+# FaRFA-Simple-YOLO (回归本源版)
 # --------------------------------------------------------
-# 策略: 
-# 1. Detail Branch 源头改为 Layer 2 (C3k2 输出)，特征更纯净。
-# 2. 下采样使用 RepConv，并显式指定 Padding=1 以修复报错。
+# 核心策略: 保留 mAP 0.60 的架构，只修补三轮车掉点。
+# 1. Head: DySample (保留，涨分核心)。
+# 2. Detail Branch: RFAConv (保留，清洗特征)。
+# 3. 下采样: ❌ 移除 HWD/SPD (三轮车杀手)。
+#           ✅ 回归 Conv(3x3, s=2) (Baseline 三轮车 0.1799 的功臣)。
+# 4. 融合: Gate (保留)。
 # --------------------------------------------------------
 
 # Parameters
@@ -12,12 +15,11 @@ nc: 6
 scales: 
   n: [0.50, 0.25, 1024] 
 
-# Backbone
+# Backbone (C3k2 原生，不动)
 backbone:
   - [-1, 1, Conv, [64, 3, 2]] # 0
-  - [-1, 1, Conv, [128, 3, 2]] # 1-P2/4 (Raw)
-  - [-1, 2, C3k2, [256, False, 0.25]] # 2-P2/4 (Refined -> 最佳源头)
-
+  - [-1, 1, Conv, [128, 3, 2]] # 1-P2/4
+  - [-1, 2, C3k2, [256, False, 0.25]]
   - [-1, 1, Conv, [256, 3, 2]] # 3-P3/8
   - [-1, 2, C3k2, [512, False, 0.25]]
   - [-1, 1, Conv, [512, 3, 2]] # 5-P4/16
@@ -29,7 +31,7 @@ backbone:
 
 # Head
 head:
-  # === DySample ===
+  # === DySample 上采样 (这是好东西，留着) ===
   - [-1, 1, DySample, [2, 'lp']] # 11
   - [[-1, 6], 1, Concat, [1]] 
   - [-1, 2, C3k2, [512, False]] # 13
@@ -38,18 +40,21 @@ head:
   - [[-1, 4], 1, Concat, [1]] 
   - [-1, 2, C3k2, [256, False]] # 16 (P3 语义流)
 
-  # === 🚀 [升级] Detail Branch ===
+  # === 🚀 Detail Branch (FaRFA-Simple) ===
   
   # 17: RFAConv 
-  # 来源: [2] (Backbone P2 的 C3k2 输出)
-  - [2, 1, RFAConv, [128]] 
+  # 既然你猜想用 C3k2 的输出(Layer 2)可能更好，这里可以用 [2]
+  # 但为了稳妥复现 0.60 的效果，我们先保持 [1]，或者你想激进点就填 [2]
+  # 这里我填 [1] 是为了保底，你可以手动改成 [2]
+  - [1, 1, RFAConv, [128]] 
   
-  # 18: RepConv 下采样
-  # 🚀 关键修复: 加上第4个参数 1 (Padding)
-  - [-1, 1, RepConv, [128, 3, 2, 1]] 
+  # 18: 🚀 普通 Conv 下采样 (替换 HWD/SPD/Rep)
+  # [128通道, 3核, 2步长]
+  # 这是 Baseline 用的东西，它能把三轮车保在 0.1799
+  - [-1, 1, Conv, [128, 3, 2]] 
 
-  # === Gate ===
-  # 19
+  # === Gate 融合 ===
+  # 19: FrequencyGate (不动)
   - [[16, 18], 1, FrequencyGate, [128, 256]] 
 
   # === 输出路径 ===
