@@ -1585,7 +1585,6 @@ def parse_model(d, ch, verbose=True):
             C2f_GhostV3,
             C2_Focal,
             Dilated_Rep,
-            EMA,
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments
@@ -1643,6 +1642,13 @@ def parse_model(d, ch, verbose=True):
             if m is C2fCIB:
                 legacy = False
 
+        elif m is EMA:
+            c1 = ch[f]
+            c2 = c1  # EMA 不改变通道数
+            # 重新组装 args
+            # 如果 YAML 是 [], args 变成 [c1, c2] -> 使用默认 factor=32
+            # 如果 YAML 是 [8], args 变成 [c1, c2, 8] -> 使用 factor=8
+            args = [c1, c2, *args]
 
         # ================== CSI_Fusion ==================
         elif m is CSI_Fusion:
