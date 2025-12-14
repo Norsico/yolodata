@@ -77,6 +77,7 @@ from .block import (
     SDC_Gate,
     Dilated_Rep,
     Semantic_Inject,
+    EMA,
 
 )
 from .conv import (
@@ -218,4 +219,5 @@ __all__ = (
     "SDC_Gate",
     "Dilated_Rep",
     "Semantic_Inject",
+    "EMA",
 )
