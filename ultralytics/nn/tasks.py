@@ -88,6 +88,8 @@ from ultralytics.nn.modules import (
     Dilated_Rep,
     Semantic_Inject,
     EMA,
+    SimAM,
+    
 )
     
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
@@ -1585,6 +1587,8 @@ def parse_model(d, ch, verbose=True):
             C2f_GhostV3,
             C2_Focal,
             Dilated_Rep,
+            SimAM,
+
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments

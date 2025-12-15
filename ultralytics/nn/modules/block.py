@@ -3113,3 +3113,20 @@ class EMA(nn.Module):
         x22 = x1.reshape(b * self.groups, c // self.groups, -1)  # b*g, c//g, hw
         weights = (torch.matmul(x11, x12) + torch.matmul(x21, x22)).reshape(b * self.groups, 1, h, w)
         return (group_x * weights.sigmoid()).reshape(b, c, h, w)
+
+
+class SimAM(nn.Module):
+    """无参注意力，适合极小目标"""
+    def __init__(self, c1=None, c2=None, e_lambda=1e-4):
+        super().__init__()
+        self.activaton = nn.Sigmoid()
+        self.e_lambda = e_lambda
+
+    def forward(self, x):
+        b, c, h, w = x.size()
+        n = w * h - 1
+        x_minus_mu_square = (x - x.mean(dim=[2, 3], keepdim=True)).pow(2)
+        y = x_minus_mu_square / (4 * (x_minus_mu_square.sum(dim=[2, 3], keepdim=True) / n + self.e_lambda)) + 0.5
+        return x * self.activaton(y)
+
+

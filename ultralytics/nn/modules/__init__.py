@@ -78,6 +78,8 @@ from .block import (
     Dilated_Rep,
     Semantic_Inject,
     EMA,
+    SimAM,
+    
 
 )
 from .conv import (
@@ -220,4 +222,6 @@ __all__ = (
     "Dilated_Rep",
     "Semantic_Inject",
     "EMA",
+    "SimAM",
+
 )
