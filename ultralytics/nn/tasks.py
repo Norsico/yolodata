@@ -1622,30 +1622,16 @@ def parse_model(d, ch, verbose=True):
                 with contextlib.suppress(ValueError):
                     args[j] = locals()[a] if a in locals() else ast.literal_eval(a)
         n = n_ = max(round(n * depth), 1) if n > 1 else n  # depth gain
-        if m in base_modules:
-            c1, c2 = ch[f], args[0]
-            if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
-                c2 = make_divisible(min(c2, max_channels) * width, 8)
-            if m is C2fAttn:  # set 1) embed channels and 2) num heads
-                args[1] = make_divisible(min(args[1], max_channels // 2) * width, 8)
-                args[2] = int(max(round(min(args[2], max_channels // 2 // 32)) * width, 1) if args[2] > 1 else args[2])
 
-            args = [c1, c2, *args[1:]]
-            if m in repeat_modules:
-                args.insert(2, n)  # number of repeats
-                n = 1
-            if m is C3k2:  # for M/L/X sizes
-                legacy = False
-                if scale in "mlx":
-                    args[3] = True
-            if m is A2C2f:
-                legacy = False
-                if scale in "lx":  # for L/X sizes
-                    args.extend((True, 1.2))
-            if m is C2fCIB:
-                legacy = False
-
-
+        if m in {SimAM, EMA}:
+            c1 = ch[f]
+            c2 = c1  # 关键点: 输入多少，输出就是多少，不进行 width 缩放
+            
+            # 重新组装参数，传给 __init__
+            # SimAM(c1, c2, ...) / EMA(channels, c2, factor)
+            # 我们只需要把 c1 和 c2 传进去，factor 会用默认值
+            args = [c1, c2]
+        
         # ================== CSI_Fusion ==================
         elif m is CSI_Fusion:
             # f 是 [19, 22, 25] 这种来源层
@@ -1654,7 +1640,6 @@ def parse_model(d, ch, verbose=True):
             args = [c2] # 传入通道列表
         # ================================================
         
-
         # ================== SGEFusion 解析逻辑 ==================
         elif m is SGEFusion:
             # f 是来源层列表，例如 [16, 17] -> [P3, Detail]
@@ -1685,15 +1670,6 @@ def parse_model(d, ch, verbose=True):
             # Semantic_Inject 的输出通道数等于 c_high (它把语义注入到了高分流中)
             c2 = c_high
 
-        elif m in {SimAM, EMA}:
-            c1 = ch[f]
-            c2 = c1  # 关键点: 输入多少，输出就是多少，不进行 width 缩放
-            
-            # 重新组装参数，传给 __init__
-            # SimAM(c1, c2, ...) / EMA(channels, c2, factor)
-            # 我们只需要把 c1 和 c2 传进去，factor 会用默认值
-            args = [c1, c2]
-
         # ================== SDC_Gate / FrequencyGate 通用解析逻辑 ==================
         elif m in {FrequencyGate, LSK_FrequencyGate, SDC_Gate}:
             # f 是来源层列表，例如 [16, 17] -> [P3, Detail]
@@ -1714,7 +1690,45 @@ def parse_model(d, ch, verbose=True):
             c2 = c_out
         # =========================================================================
 
+        # ==================== 1. 新增 DySample ====================
+        elif m is DySample:
+            c1 = ch[f]
+            c2 = c1
+            args = [c1, *args]
+        # ==================== 新增代码结束 ====================
 
+        # ==================== 2. 新增 Down_wt (HWD) ====================
+        elif m is Down_wt:
+            c1, c2 = ch[f], args[0]
+            # 这一步非常重要！让通道数根据模型宽度(n/s/m/l)自动缩放
+            # 如果不加这行，你的 yolo11n 会拥有和 yolo11l 一样巨大的通道数，显存直接爆炸
+            c2 = make_divisible(min(c2, max_channels) * width, 8)
+            args = [c1, c2]
+        # ==================== 新增代码结束 ====================
+
+        elif m in base_modules:
+            c1, c2 = ch[f], args[0]
+            if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
+                c2 = make_divisible(min(c2, max_channels) * width, 8)
+            if m is C2fAttn:  # set 1) embed channels and 2) num heads
+                args[1] = make_divisible(min(args[1], max_channels // 2) * width, 8)
+                args[2] = int(max(round(min(args[2], max_channels // 2 // 32)) * width, 1) if args[2] > 1 else args[2])
+
+            args = [c1, c2, *args[1:]]
+            if m in repeat_modules:
+                args.insert(2, n)  # number of repeats
+                n = 1
+            if m is C3k2:  # for M/L/X sizes
+                legacy = False
+                if scale in "mlx":
+                    args[3] = True
+            if m is A2C2f:
+                legacy = False
+                if scale in "lx":  # for L/X sizes
+                    args.extend((True, 1.2))
+            if m is C2fCIB:
+                legacy = False
+        
         elif m is AIFI:
             args = [ch[f], *args]
         elif m in frozenset({HGStem, HGBlock}):
@@ -1744,26 +1758,7 @@ def parse_model(d, ch, verbose=True):
             c1 = ch[f]
             args = [c1, c2, *args[1:]]
         elif m is CBFuse:
-            c2 = ch[f[-1]]
-
-
-        # ==================== 1. 新增 DySample ====================
-        elif m is DySample:
-            c1 = ch[f]
-            c2 = c1
-            args = [c1, *args]
-        # ==================== 新增代码结束 ====================
-
-
-        # ==================== 2. 新增 Down_wt (HWD) ====================
-        elif m is Down_wt:
-            c1, c2 = ch[f], args[0]
-            # 这一步非常重要！让通道数根据模型宽度(n/s/m/l)自动缩放
-            # 如果不加这行，你的 yolo11n 会拥有和 yolo11l 一样巨大的通道数，显存直接爆炸
-            c2 = make_divisible(min(c2, max_channels) * width, 8)
-            args = [c1, c2]
-        # ==================== 新增代码结束 ====================
-
+            c2 = ch[f[-1]]    
 
         elif m in frozenset({TorchVision, Index}):
             c2 = args[0]
