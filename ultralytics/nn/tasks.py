@@ -1586,8 +1586,7 @@ def parse_model(d, ch, verbose=True):
             C2f_GhostV3,
             C2_Focal,
             Dilated_Rep,
-            EMA,
-            SimAM,
+            
 
         }
     )
@@ -1685,6 +1684,15 @@ def parse_model(d, ch, verbose=True):
             
             # Semantic_Inject 的输出通道数等于 c_high (它把语义注入到了高分流中)
             c2 = c_high
+
+        elif m in {SimAM, EMA}:
+            c1 = ch[f]
+            c2 = c1  # 关键点: 输入多少，输出就是多少，不进行 width 缩放
+            
+            # 重新组装参数，传给 __init__
+            # SimAM(c1, c2, ...) / EMA(channels, c2, factor)
+            # 我们只需要把 c1 和 c2 传进去，factor 会用默认值
+            args = [c1, c2]
 
         # ================== SDC_Gate / FrequencyGate 通用解析逻辑 ==================
         elif m in {FrequencyGate, LSK_FrequencyGate, SDC_Gate}:
