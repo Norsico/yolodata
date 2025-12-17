@@ -1724,7 +1724,7 @@ def parse_model(d, ch, verbose=True):
         # ===============================================================
 
 
-        elif m in base_modules:
+        elif m in base_modules or m in {VoVGSCSP, VoVGSCSP_S}:
             c1, c2 = ch[f], args[0]
             if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
                 c2 = make_divisible(min(c2, max_channels) * width, 8)
