@@ -79,7 +79,8 @@ from .block import (
     Semantic_Inject,
     EMA,
     SimAM,
-    
+    GSConv,
+    VoVGSCSP,
 
 )
 from .conv import (
@@ -223,5 +224,7 @@ __all__ = (
     "Semantic_Inject",
     "EMA",
     "SimAM",
-
+    "GSConv",
+    "VoVGSCSP",
+    
 )
