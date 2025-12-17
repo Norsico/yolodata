@@ -81,6 +81,8 @@ from .block import (
     SimAM,
     GSConv,
     VoVGSCSP,
+    VoVGSCSP_S,
+    GSBottleneck
 
 )
 from .conv import (
@@ -226,5 +228,7 @@ __all__ = (
     "SimAM",
     "GSConv",
     "VoVGSCSP",
+    "VoVGSCSP_S",
+    "GSBottleneck",
     
 )

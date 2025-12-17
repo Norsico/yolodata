@@ -91,7 +91,7 @@ from ultralytics.nn.modules import (
     SimAM,
     GSConv,
     VoVGSCSP,
-
+    VoVGSCSP_S
 )
     
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
@@ -1610,6 +1610,8 @@ def parse_model(d, ch, verbose=True):
             C2fCIB,
             C2PSA,
             A2C2f,
+            VoVGSCSP,
+            VoVGSCSP_S,
         }
     )
     for i, (f, n, m, args) in enumerate(d["backbone"] + d["head"]):  # from, number, module, args
@@ -1719,24 +1721,6 @@ def parse_model(d, ch, verbose=True):
                 c2 = make_divisible(min(c2, max_channels) * width, 8)
             # 重新组装 args: [c_in, c_out, k, s, ...]
             args = [c1, c2, *args[1:]]
-        # ===============================================================
-
-        
-        # ==================== 4. 新增 VoVGSCSP 解析逻辑 ====================
-        # VoVGSCSP 的参数逻辑和 C3/C3k2 一样：[c_out, n]
-        # 需要进行 width (通道数) 和 depth (层数 n) 双重缩放
-        elif m is VoVGSCSP:
-            c1, c2 = ch[f], args[0]
-            if c2 != nc:
-                c2 = make_divisible(min(c2, max_channels) * width, 8)
-            
-            # 这一步是把 YAML 里的 n 乘以 depth_multiple (比如 0.33)
-            # args[1] 通常是 n (重复次数)
-            args = [c1, c2, *args[1:]]
-            if m is VoVGSCSP:
-                # 如果 YAML 里写了 n (args长度>2)，则进行缩放，否则默认为 1
-                if len(args) > 2:
-                    args[2] = int(max(round(args[2] * depth), 1))
         # ===============================================================
 
 

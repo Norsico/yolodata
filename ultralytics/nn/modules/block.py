@@ -3194,28 +3194,44 @@ class GSBottleneckC(GSBottleneck):
         super().__init__(c1, c2, k, s)
         self.shortcut = DWConv(c1, c2, 3, 1, act=False)
 
+
 class VoVGSCSP(nn.Module):
     # VoVGSCSP module with GSBottleneck
     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
-        self.gc2 = GSConv(c1, c_, 3, 1, 1)
-        # 注意: 这里的 self.m 使用了 C2f，请确保 block.py 中有 class C2f 定义
-        self.m = C2f(c_, c_, 1, 1) 
-        self.cv3 = Conv(2*c_, c2, 1)
+        self.cv2 = Conv(c1, c_, 1, 1)
+        # 核心修改：使用 GSBottleneck 堆叠，而不是 C2f
+        # 注意：这里 n 代表堆叠次数，Slim-neck 原版通常 n=1 也就够了，但为了保持容量支持 n
+        self.m = nn.Sequential(*(GSBottleneck(c_, c_, e=1.0) for _ in range(n)))
+        self.cv3 = Conv(c_ * 2 + c_, c2, 1) # 输出融合
 
     def forward(self, x):
-        x1 = self.m(self.cv1(x))
-        y = self.gc2(x)
-        return self.cv3(torch.cat((y, x1), dim=1))
+        x1 = self.cv1(x)
+        x2 = self.cv2(x)
+        x3 = self.m(x1) # 通过 GSBottleneck 提取深层特征
+        # Cross Stage Partial 融合：原始 x2 + 处理后的 x3
+        return self.cv3(torch.cat((x2, x3, x1), dim=1)) 
+        # 注：上面的 forward 写法参考了 Slim-neck 某些变体，
+        # 如果你想用最简单的 VoVGSCSP (GSConv版)，用下面这个更稳的写法：
 
-class VoVGSCSPC(VoVGSCSP):
-    # cheap VoVGSCSP module with GSBottleneck
+class VoVGSCSP_S(nn.Module):
+    # 简易版 VoVGSCSP，专门针对极轻量化
     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
-        super().__init__(c1, c2, e)
-        c_ = int(c2 * e)  # hidden channels
-        self.gsb = GSBottleneckC(c_, c_, 3, 1)
+        super().__init__()
+        c_ = int(c2 * e)
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.gs2 = GSConv(c1, c_, 1, 1) # 使用 GSConv 分支
+        self.m = nn.Sequential(*(GSBottleneck(c_, c_) for _ in range(n)))
+        self.cv3 = Conv(2 * c_, c2, 1)
+
+    def forward(self, x):
+        x1 = self.cv1(x)
+        x2 = self.gs2(x)
+        x3 = self.m(x1)
+        return self.cv3(torch.cat((x2, x3), dim=1))
+
 # ================== GSConv Modules End ==================
 
 
