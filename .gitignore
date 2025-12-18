@@ -208,3 +208,8 @@ compare_models(可视化).py
 compare_models.py
 
 yolo_cam
+
+train_local.ipynb
+YOLO_v11_EigenCAM.ipynb
+split_datasets.py
+test.py

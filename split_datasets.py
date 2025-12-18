@@ -9,13 +9,14 @@ from tqdm import tqdm  # 如果没有安装tqdm，可以注释掉相关行，改
 SRC_ROOT = Path(r"G:\ultralytics\datasets\SODA10M_82_10k")
 
 # 目标数据集根目录
-DST_ROOT = Path(r"G:\ultralytics\datasets\SODA10M_82_3k")
+DST_ROOT = Path(r"G:\ultralytics\datasets\SODA10M_28_10k")
 
 # 目标总数量
-TARGET_TOTAL = 3000
+TARGET_TOTAL = 10000
 
-# 训练集占比 (0.8 即 8:2)
-TRAIN_RATIO = 0.8
+# 训练集占比
+#  (0.8 即 8:2)
+TRAIN_RATIO = 0.2
 
 # 支持的图片格式
 IMG_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'}
