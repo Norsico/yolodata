@@ -215,4 +215,6 @@ split_datasets.py
 test.py
 模型能力排序.py
 计算量评估.ipynb
+log.txt
+可视化训练.py
 
