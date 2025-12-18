@@ -82,8 +82,8 @@ from .block import (
     GSConv,
     VoVGSCSP,
     VoVGSCSP_S,
-    GSBottleneck
-
+    GSBottleneck,
+    LightSDI,
 )
 from .conv import (
     CBAM,
@@ -230,5 +230,5 @@ __all__ = (
     "VoVGSCSP",
     "VoVGSCSP_S",
     "GSBottleneck",
-    
+    "LightSDI",
 )

@@ -3235,3 +3235,24 @@ class VoVGSCSP_S(nn.Module):
 # ================== GSConv Modules End ==================
 
 
+class LightSDI(nn.Module):
+    """
+    Light Semantic-Detail Injection (加法融合)
+    替代 Heavy Concat Fusion (Concat + Conv).
+    作用: 极低计算量融合两路特征，利用可学习系数自动平衡权重。
+    """
+    def __init__(self, c_sem, c_detail):
+        super().__init__()
+        # 如果 detail 通道跟 semantic 不一样，用 1x1 卷积对齐
+        # 这里的 1x1 很便宜，因为输入通道被我们砍到了 64
+        self.align = nn.Conv2d(c_detail, c_sem, 1, 1) if c_sem != c_detail else nn.Identity()
+        # 可学习的缩放因子，让网络自己决定 Detail 重要还是 Semantic 重要
+        self.alpha = nn.Parameter(torch.ones(1) * 0.5)
+        self.beta = nn.Parameter(torch.ones(1) * 0.5)
+
+    def forward(self, x):
+        # x[0]: Semantic (P3, 80x80)
+        # x[1]: Detail (P2, 160x160 -> 下采样后)
+        sem, det = x[0], x[1]
+        return self.alpha * sem + self.beta * self.align(det)
+

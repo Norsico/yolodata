@@ -91,7 +91,8 @@ from ultralytics.nn.modules import (
     SimAM,
     GSConv,
     VoVGSCSP,
-    VoVGSCSP_S
+    VoVGSCSP_S,
+    LightSDI,
 )
     
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
@@ -1723,7 +1724,50 @@ def parse_model(d, ch, verbose=True):
             args = [c1, c2, *args[1:]]
         # ===============================================================
 
+        # ==================== 4. 修复 C3Ghost 解析逻辑 ====================
+        elif m is C3Ghost:
+            c1, c2 = ch[f], args[0]
+            if c2 != nc:
+                # 修正点 1: 变量名必须用 width (对应你的上下文)
+                c2 = make_divisible(min(c2, max_channels) * width, 8)
 
+            # 修正点 2: 直接解析 YAML 参数
+            # YAML 写法: [512, False, 0.25] -> [c_out, shortcut, e]
+            shortcut = args[1] if len(args) > 1 else True
+            e = args[2] if len(args) > 2 else 0.5
+            
+            # 修正点 3: 显式组装参数，强行指定 g=1
+            # C3Ghost init 顺序: (c1, c2, n, shortcut, g, e)
+            # n 在大循环里已经算好了（包含了 depth_multiple 缩放），直接用即可
+            args = [c1, c2, n, shortcut, 1, e]
+
+            # 修正点 4: 关键！将 n 重置为 1
+            # 因为 C3Ghost 内部已经处理了 n 次重复，不需要外层再套 nn.Sequential
+            n = 1
+        # ================================================================
+
+
+        # ==================== RepConv 解析逻辑 (官方模块) ====================
+        elif m is RepConv:
+            c1, c2 = ch[f], args[0]
+            if c2 != nc:
+                # 必须进行 width 缩放，否则通道数会对不上
+                c2 = make_divisible(min(c2, max_channels) * width, 8)
+            # 官方 RepConv args: [c1, c2, k=3, s=1, p=1, g=1, d=1, act=True, bn=False, deploy=False]
+            # YAML 传入 args: [c_out, k, s, ...]
+            # 我们组装: [c1, c2, *args[1:]] -> 也就是 [c1, c2, k, s, ...]
+            args = [c1, c2, *args[1:]]
+
+        # ==================== LightSDI 解析逻辑 (自定义融合) ====================
+        elif m is LightSDI:
+            # 自动从来源层获取通道数，YAML 里写 [] 即可
+            c_sem = ch[f[0]]
+            c_detail = ch[f[1]]
+            args = [c_sem, c_detail]
+            c2 = c_sem # 输出通道数保持为主路通道数
+        # ===================================================================
+
+        
         elif m in base_modules or m in {VoVGSCSP, VoVGSCSP_S}:
             c1, c2 = ch[f], args[0]
             if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
