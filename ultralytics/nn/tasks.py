@@ -1842,12 +1842,6 @@ def parse_model(d, ch, verbose=True):
         else:
             c2 = ch[f]
 
-        try:
-            # 打印当前正在解析的层信息，报错前最后一条就是凶手
-            print(f"👉 正在构建层: {m.__name__} | 输入通道: {c1} (Type: {type(c1)}) | 参数 args: {args}")
-        except:
-            pass
-
         m_ = torch.nn.Sequential(*(m(*args) for _ in range(n))) if n > 1 else m(*args)  # module
         t = str(m)[8:-2].replace("__main__.", "")  # module type
         m_.np = sum(x.numel() for x in m_.parameters())  # number params
