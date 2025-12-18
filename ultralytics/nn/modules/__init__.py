@@ -84,6 +84,7 @@ from .block import (
     VoVGSCSP_S,
     GSBottleneck,
     LightSDI,
+    C3_PKI,
 )
 from .conv import (
     CBAM,
@@ -231,4 +232,5 @@ __all__ = (
     "VoVGSCSP_S",
     "GSBottleneck",
     "LightSDI",
+    "C3_PKI",
 )

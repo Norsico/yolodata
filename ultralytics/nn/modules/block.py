@@ -2141,6 +2141,10 @@ class FrequencyGate(nn.Module):
         # c_sem: 主干 P3 的通道数 (通常 256)
         # c_detail: 细节分支的通道数 (我们设为 128)
         # c_out: 融合后输出的通道数 (保持 256)
+
+        c_sem = int(c_sem)
+        c_detail = int(c_detail)
+        c_out = int(c_out)
         
         # 1. 门控生成器: 用语义信息判断哪里是物体
         self.gate_gen = nn.Sequential(
@@ -2519,7 +2523,8 @@ class RFAConv(nn.Module):
     def __init__(self, in_channel, out_channel, kernel_size=3, stride=1):
         super().__init__()
         self.kernel_size = kernel_size
-
+        in_channel = int(in_channel)
+        out_channel = int(out_channel)
         # 1. 获取权重 (通过 AvgPool 快速聚合感受野信息)
         self.get_weight = nn.Sequential(
             nn.AvgPool2d(kernel_size=kernel_size, padding=kernel_size // 2, stride=stride),
@@ -3255,4 +3260,127 @@ class LightSDI(nn.Module):
         # x[1]: Detail (P2, 160x160 -> 下采样后)
         sem, det = x[0], x[1]
         return self.alpha * sem + self.beta * self.align(det)
+# ================================================================
+# 1. 修复版 CAA (Context Anchor Attention)
+# ================================================================
+class CAA(nn.Module):
+    def __init__(self, channels, h_kernel_size=11, v_kernel_size=11):
+        super().__init__()
+        channels = int(channels) # 🔒 强转
+        h_kernel_size = int(h_kernel_size)
+        v_kernel_size = int(v_kernel_size)
+
+        self.avg_pool = nn.AvgPool2d(7, 1, 3)
+        self.conv1 = Conv(channels, channels, 1, 1)
+        
+        # 手动计算 padding，确保是 int
+        h_pad = h_kernel_size // 2
+        v_pad = v_kernel_size // 2
+        
+        self.h_conv = nn.Conv2d(channels, channels, (1, h_kernel_size), stride=1, 
+                                padding=(0, h_pad), groups=channels)
+        self.v_conv = nn.Conv2d(channels, channels, (v_kernel_size, 1), stride=1, 
+                                padding=(v_pad, 0), groups=channels)
+        self.conv2 = Conv(channels, channels, 1, 1)
+        self.act = nn.Sigmoid()
+
+    def forward(self, x):
+        attn = self.avg_pool(x)
+        attn = self.conv1(attn)
+        attn = self.h_conv(attn)
+        attn = self.v_conv(attn)
+        attn = self.conv2(attn)
+        attn = self.act(attn)
+        return x * attn
+
+# ================================================================
+# 2. 修复版 InceptionBottleneck
+# ================================================================
+class InceptionBottleneck(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_sizes=(3, 5, 7), expansion=0.5):
+        super().__init__()
+        in_channels = int(in_channels) # 🔒 强转
+        out_channels = int(out_channels)
+        hidden_channels = int(out_channels * expansion) # 🔒 确保计算结果是 int
+        
+        self.pre_conv = Conv(in_channels, hidden_channels, 1, 1)
+        
+        # 手动构建 DWConv 列表，杜绝任何 float 混入
+        self.dw_convs = nn.ModuleList()
+        for k in kernel_sizes:
+            k = int(k)
+            p = int(k // 2)
+            # 使用 nn.Conv2d 而不是 Conv，避免 autopad 可能的问题
+            self.dw_convs.append(
+                nn.Conv2d(hidden_channels, hidden_channels, k, 1, p, groups=hidden_channels, bias=False)
+            )
+            
+        self.pw_conv = Conv(hidden_channels, hidden_channels, 1, 1)
+        self.caa = CAA(hidden_channels)
+        self.post_conv = Conv(hidden_channels, out_channels, 1, 1)
+        self.add = in_channels == out_channels
+
+    def forward(self, x):
+        res = x
+        x = self.pre_conv(x)
+        
+        # Poly Kernel 融合
+        y = x
+        sum_feat = None
+        for dw in self.dw_convs:
+            out = dw(y)
+            if sum_feat is None:
+                sum_feat = out
+            else:
+                sum_feat = sum_feat + out
+                
+        x = self.pw_conv(sum_feat)
+        x = self.caa(x)
+        x = self.post_conv(x)
+        return res + x if self.add else x
+
+# ================================================================
+# 3. 独立重写版 C3_PKI (不继承 C3k2/C2f)
+# ================================================================
+class C3_PKI(nn.Module):
+    """
+    C3_PKI Standalone Version
+    结构仿照 C2f: Split -> Bottlenecks -> Concat -> Output
+    """
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__()
+        # 1. 清洗所有参数为 int
+        c1 = int(c1)
+        c2 = int(c2)
+        n = int(n)
+        g = int(g)
+        
+        # 2. 计算中间通道
+        self.c = int(c2 * e) 
+        
+        # 3. 构建类似 C2f 的结构
+        # cv1 将输入分为两部分: 一部分直接连到最后，一部分进入 bottlenecks
+        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
+        
+        # 4. 构建 Bottleneck 序列
+        # 注意: InceptionBottleneck 输入输出都是 self.c
+        self.m = nn.ModuleList(
+            InceptionBottleneck(self.c, self.c, kernel_sizes=(3, 5, 7), expansion=1.0) 
+            for _ in range(n)
+        )
+        
+        # 5. 输出层
+        # 输入通道 = self.c (shortcut部分) + n * self.c (每个block的输出)
+        # 仿照 C2f 的 Dense 连接机制
+        self.cv2 = Conv((2 + n) * self.c, c2, 1) 
+
+    def forward(self, x):
+        # 仿照 C2f 的前向传播逻辑
+        # 1. Split
+        y = list(self.cv1(x).chunk(2, 1))
+        # 2. Forward through blocks, extending the list
+        y.extend(m(y[-1]) for m in self.m)
+        # 3. Concat and Output
+        return self.cv2(torch.cat(y, 1))
+
 

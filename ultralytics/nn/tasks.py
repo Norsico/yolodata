@@ -93,6 +93,7 @@ from ultralytics.nn.modules import (
     VoVGSCSP,
     VoVGSCSP_S,
     LightSDI,
+    C3_PKI,
 )
     
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
@@ -1590,7 +1591,7 @@ def parse_model(d, ch, verbose=True):
             C2f_GhostV3,
             C2_Focal,
             Dilated_Rep,
-            
+            C3_PKI,
 
         }
     )
@@ -1613,6 +1614,7 @@ def parse_model(d, ch, verbose=True):
             A2C2f,
             VoVGSCSP,
             VoVGSCSP_S,
+            C3_PKI,
         }
     )
     for i, (f, n, m, args) in enumerate(d["backbone"] + d["head"]):  # from, number, module, args
@@ -1676,25 +1678,25 @@ def parse_model(d, ch, verbose=True):
             # Semantic_Inject 的输出通道数等于 c_high (它把语义注入到了高分流中)
             c2 = c_high
 
-        # ================== SDC_Gate / FrequencyGate 通用解析逻辑 ==================
-        elif m in {FrequencyGate, LSK_FrequencyGate, SDC_Gate}:
-            # f 是来源层列表，例如 [16, 17] -> [P3, Detail]
-            # args 是 YAML 里的参数，例如 [128, 256] -> [c_detail_hint, c_out]
+        # # ================== SDC_Gate / FrequencyGate 通用解析逻辑 ==================
+        # elif m in {LSK_FrequencyGate, SDC_Gate}:
+        #     # f 是来源层列表，例如 [16, 17] -> [P3, Detail]
+        #     # args 是 YAML 里的参数，例如 [128, 256] -> [c_detail_hint, c_out]
             
-            # 1. 自动从 ch 列表中获取真实的输入通道数
-            c_sem = ch[f[0]]     # 主语义流 (P3) 真实通道数
-            c_detail = ch[f[1]]  # 细节流 (Detail) 真实通道数
+        #     # 1. 自动从 ch 列表中获取真实的输入通道数
+        #     c_sem = ch[f[0]]     # 主语义流 (P3) 真实通道数
+        #     c_detail = ch[f[1]]  # 细节流 (Detail) 真实通道数
             
-            # 2. 获取输出通道数 (YAML 中第二个参数)
-            c_out = args[1]
+        #     # 2. 获取输出通道数 (YAML 中第二个参数)
+        #     c_out = args[1]
             
-            # 3. 重组参数传给 __init__(self, c_sem, c_detail, c_out)
-            # 这三个类的初始化参数顺序都是一样的，所以通用
-            args = [c_sem, c_detail, c_out]
+        #     # 3. 重组参数传给 __init__(self, c_sem, c_detail, c_out)
+        #     # 这三个类的初始化参数顺序都是一样的，所以通用
+        #     args = [c_sem, c_detail, c_out]
             
-            # 4. 更新当前层的输出通道数 c2，供下一层使用
-            c2 = c_out
-        # =========================================================================
+        #     # 4. 更新当前层的输出通道数 c2，供下一层使用
+        #     c2 = c_out
+        # # =========================================================================
 
         # ==================== 1. 新增 DySample ====================
         elif m is DySample:
@@ -1767,7 +1769,18 @@ def parse_model(d, ch, verbose=True):
             c2 = c_sem # 输出通道数保持为主路通道数
         # ===================================================================
 
-        
+        elif m is FrequencyGate:
+            # f 应该是 [idx_sem, idx_detail]，例如 [16, 18]
+            c_sem = int(ch[f[0]])    # 语义分支通道 (e.g., 256)
+            c_detail = int(ch[f[1]]) # 细节分支通道 (e.g., 128)
+            
+            # FrequencyGate 构造函数: (c_sem, c_detail, c_out)
+            # 这里我们设定 c_out = c_sem (保持通道数不变)
+            c2 = c_sem 
+            
+            # 重新构造 args，不管 YAML 里写没写参数
+            args = [c_sem, c_detail, c2]    
+    
         elif m in base_modules or m in {VoVGSCSP, VoVGSCSP_S}:
             c1, c2 = ch[f], args[0]
             if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
@@ -1828,6 +1841,12 @@ def parse_model(d, ch, verbose=True):
             args = [*args[1:]]
         else:
             c2 = ch[f]
+
+        try:
+            # 打印当前正在解析的层信息，报错前最后一条就是凶手
+            print(f"👉 正在构建层: {m.__name__} | 输入通道: {c1} (Type: {type(c1)}) | 参数 args: {args}")
+        except:
+            pass
 
         m_ = torch.nn.Sequential(*(m(*args) for _ in range(n))) if n > 1 else m(*args)  # module
         t = str(m)[8:-2].replace("__main__.", "")  # module type
