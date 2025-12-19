@@ -1,0 +1,61 @@
+# =============================================================================
+# YOLOv11n-Final-Stable
+# Strategy: 
+# 1. UPSAMPLE: Revert to nn.Upsample (Stable & Sharp for 640px)
+# 2. DETAIL: Optimized Branch (Downsample -> RFAConv 64ch)
+# 3. NECK: Full C3k2 (Proven capacity for Tricycle)
+# Target: The stability of Baseline + The accuracy of 12-13-2
+# =============================================================================
+
+# Parameters
+nc: 6 
+scales: 
+  n: [0.50, 0.25, 1024] 
+
+# Backbone (Official - Do not touch)
+backbone:
+  - [-1, 1, Conv, [64, 3, 2]] # 0
+  - [-1, 1, Conv, [128, 3, 2]] # 1-P2/4
+  - [-1, 2, C3k2, [256, False, 0.25]] # 2
+  - [-1, 1, Conv, [256, 3, 2]] # 3-P3/8
+  - [-1, 2, C3k2, [512, False, 0.25]] # 4
+  - [-1, 1, Conv, [512, 3, 2]] # 5-P4/16
+  - [-1, 2, C3k2, [512, True]] # 6
+  - [-1, 1, Conv, [1024, 3, 2]] # 7-P5/32
+  - [-1, 2, C3k2, [1024, True]] # 8
+  - [-1, 1, SPPF, [1024, 5]] # 9
+  - [-1, 2, C2PSA, [1024]] # 10
+
+# Head
+head:
+  # === P5 -> P4 ===
+  # 🔄 [回归] 既然 DySample 没用，就用最稳的 Nearest
+  - [-1, 1, nn.Upsample, [None, 2, 'nearest']] # 11 
+  - [[-1, 6], 1, Concat, [1]] 
+  - [-1, 2, C3k2, [512, False]] # 13 (Keep Heavy)
+
+  # === P4 -> P3 ===
+  # 🔄 [回归] Nearest 插值，边缘最硬，适合小目标
+  - [-1, 1, nn.Upsample, [None, 2, 'nearest']] # 14
+  - [[-1, 4], 1, Concat, [1]] 
+  - [-1, 2, C3k2, [256, False]] # 16 (Keep Heavy)
+
+  # === 🚀 Detail Branch (核心涨点来源) ===
+  # 逻辑优化：先 Conv(s=2) 下采样，再做 RFAConv
+  # 这步能把算力控制在 8.x G，同时保留 12-13-2 的纹理增强能力
+  - [1, 1, Conv, [64, 3, 2]] # 17 (Out: 80x80x64)
+  - [-1, 1, RFAConv, [64]] # 18 (Cheap & Effective)
+
+  # === Gate ===
+  - [[16, 18], 1, FrequencyGate, [256, 256]] # 19 
+
+  # === Output Path ===
+  - [19, 1, Conv, [256, 3, 2]] # 20
+  - [[-1, 13], 1, Concat, [1]] 
+  - [-1, 2, C3k2, [512, False]] # 22
+
+  - [-1, 1, Conv, [512, 3, 2]] # 23
+  - [[-1, 10], 1, Concat, [1]] 
+  - [-1, 2, C3k2, [1024, True]] # 25
+
+  - [[19, 22, 25], 1, Detect, [nc]] # 26
