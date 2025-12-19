@@ -65,7 +65,6 @@ from .block import (
     FrequencyGate,
     HWD_Down,
     ScConv,
-    C2f_Star,
     C3_Faster,
     LSK_FrequencyGate,
     HFD_Down,
@@ -78,7 +77,8 @@ from .block import (
     Dilated_Rep,
     Semantic_Inject,
     EMA,
-
+    C3_Star,
+    
 )
 from .conv import (
     CBAM,
@@ -207,7 +207,6 @@ __all__ = (
     "FrequencyGate",
     "HWD_Down",
     "ScConv",
-    "C2f_Star",
     "C3_Faster",
     "LSK_FrequencyGate",
     "HFD_Down",
@@ -220,4 +219,5 @@ __all__ = (
     "Dilated_Rep",
     "Semantic_Inject",
     "EMA",
+    "C3_Star",
 )

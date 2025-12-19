@@ -12,7 +12,7 @@ from ultralytics.utils.torch_utils import fuse_conv_and_bn
 
 from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad
 from .transformer import TransformerBlock
-
+from .conv import DySample
 
 __all__ = (
     "C1",
@@ -2131,38 +2131,42 @@ class SPDConv(nn.Module):
 
 class FrequencyGate(nn.Module):
     """
-    FD-YOLO 核心组件: 频率门控融合模块
-    论文卖点: "Frequency-aware Dynamic Fusion"
+    Frequency-aware Dynamic Fusion (Optimized Version)
+    优化版: 使用 DWConv 降低计算量
     """
     def __init__(self, c_sem, c_detail, c_out):
         super().__init__()
-        # c_sem: 主干 P3 的通道数 (通常 256)
-        # c_detail: 细节分支的通道数 (我们设为 128)
-        # c_out: 融合后输出的通道数 (保持 256)
-        
-        # 1. 门控生成器: 用语义信息判断哪里是物体
+        # 1. 门控生成器 (轻量化)
         self.gate_gen = nn.Sequential(
-            nn.Conv2d(c_sem, c_sem // 2, 1),
-            nn.BatchNorm2d(c_sem // 2),
+            # 先降维，减少计算
+            nn.Conv2d(c_sem, c_detail, 1, bias=False),
+            nn.BatchNorm2d(c_detail),
             nn.SiLU(),
-            nn.Conv2d(c_sem // 2, c_detail, 1), # 输出通道对齐 detail
-            nn.Sigmoid() # 生成 0~1 的 mask
+            # DWConv 提取上下文，不增加太多 FLOPs
+            nn.Conv2d(c_detail, c_detail, 3, 1, 1, groups=c_detail, bias=False), 
+            nn.Sigmoid() 
         )
         
-        # 2. 融合层
+        # 2. 融合层 (输入是 c_sem + c_detail)
+        # 这里是计算量大头，我们先用 1x1 融合，再用 DW 混洗
         self.fusion = nn.Sequential(
             nn.Conv2d(c_sem + c_detail, c_out, 1, bias=False),
+            nn.BatchNorm2d(c_out),
+            # 可选: 加一个 DWConv 增强融合效果
+            nn.Conv2d(c_out, c_out, 3, 1, 1, groups=c_out, bias=False),
             nn.BatchNorm2d(c_out),
             nn.SiLU()
         )
 
     def forward(self, x):
-        # 🚀 关键修改: YOLO 传进来的是一个列表，我们手动解包
-        x_sem, x_detail = x 
+        x_sem, x_detail = x # 解包
         
-        # 下面保持不变
+        # 计算 Gate
         gate = self.gate_gen(x_sem)
+        # 门控机制：只允许有效的 Detail 通过
         x_detail_clean = x_detail * gate
+        
+        # 融合
         return self.fusion(torch.cat([x_sem, x_detail_clean], dim=1))
 
 # 如果之前的 HWD 代码删了，这里是一个极简版，直接加进去
@@ -2192,79 +2196,70 @@ class HWD_Down(nn.Module):
 # Source: https://github.com/ma-xu/Rewrite-the-Stars
 # Adapted for YOLOv11 by User
 # ==========================================
-
-class Star_ConvBN(nn.Sequential):
-    """ 
-    StarNet 源码中的辅助类: Conv + BN (无激活函数)
-    """
-    def __init__(self, in_planes, out_planes, kernel_size=1, stride=1, padding=0, dilation=1, groups=1, with_bn=True):
-        super().__init__()
-        self.add_module('conv', nn.Conv2d(in_planes, out_planes, kernel_size, stride, padding, dilation, groups, bias=False))
-        if with_bn:
-            self.add_module('bn', nn.BatchNorm2d(out_planes))
-
 class StarBlock(nn.Module):
     """
-    StarBlock: The core unit of StarNet.
-    Structure: DWConv -> F1/F2 (Expansion) -> Star Operation -> G (Reduction) -> DWConv2
+    StarBlock v3: Anorexic Version (极度瘦身版)
+    Fix: 引入 expand 参数，默认 0.5，强制减少内部通道数以抵消多分支带来的计算量。
     """
-    def __init__(self, dim, mlp_ratio=3, drop_path=0.):
+    def __init__(self, c1, c2, k=7, s=1, expand=0.5):
         super().__init__()
-        # 1. 第一个 DWConv (7x7), 负责大感受野空间聚合
-        self.dwconv = Star_ConvBN(dim, dim, 7, 1, (7 - 1) // 2, groups=dim, with_bn=True)
+        # 🔪 关键修改: 默认砍半通道。
+        # 如果输入 128，中间只用 64。这能极大降低 FLOPs。
+        mid_c = int(c2 * expand) 
         
-        # 2. 两个 1x1 卷积负责通道扩展 (类似 Transformer 的 FFN 扩展)
-        self.f1 = Star_ConvBN(dim, mlp_ratio * dim, 1, with_bn=False)
-        self.f2 = Star_ConvBN(dim, mlp_ratio * dim, 1, with_bn=False)
+        # 1. DWConv (DW是便宜的，保持原通道)
+        self.dwconv = nn.Conv2d(c1, c1, k, s, padding=k//2, groups=c1, bias=False)
+        self.bn1 = nn.BatchNorm2d(c1)
         
-        # 3. 降维投影 1x1
-        self.g = Star_ConvBN(mlp_ratio * dim, dim, 1, with_bn=True)
+        # 2. Star Branches (变窄了)
+        self.f1 = nn.Conv2d(c1, mid_c, 1, 1, bias=False)
+        self.f2 = nn.Conv2d(c1, mid_c, 1, 1, bias=False)
+        self.bn2 = nn.BatchNorm2d(mid_c)
+        self.bn3 = nn.BatchNorm2d(mid_c)
         
-        # 4. 第二个 DWConv (7x7), 在降维后再次提取特征 (这是 StarNet 的独特之处)
-        self.dwconv2 = Star_ConvBN(dim, dim, 7, 1, (7 - 1) // 2, groups=dim, with_bn=False)
-        
-        # 5. 激活函数 (ReLU6)
         self.act = nn.ReLU6()
         
-        # Nano 模型一般不需要 stochastic depth，直接用 Identity
-        self.drop_path = nn.Identity()
+        # 3. Reduction
+        self.g = nn.Conv2d(mid_c, c2, 1, 1, bias=False)
+        self.bn4 = nn.BatchNorm2d(c2)
+        
+        self.dwconv2 = nn.Conv2d(c2, c2, k, 1, padding=k//2, groups=c2, bias=False)
+        self.bn5 = nn.BatchNorm2d(c2)
 
     def forward(self, x):
-        input = x
+        res = x
         x = self.dwconv(x)
+        x = self.bn1(x)
         
-        # --- Star Operation Start ---
-        x1, x2 = self.f1(x), self.f2(x)
-        # 核心创新: 元素级乘法将特征映射到高维隐式空间
-        x = self.act(x1) * x2 
-        # --- Star Operation End ---
+        x1 = self.f1(x)
+        x1 = self.bn2(x1)
         
-        x = self.dwconv2(self.g(x))
-        x = input + self.drop_path(x)
-        return x
+        x2 = self.f2(x)
+        x2 = self.bn3(x2)
+        x2 = self.act(x2)
+        
+        x = x1 * x2 
+        
+        x = self.g(x)
+        x = self.bn4(x)
+        
+        x = self.dwconv2(x)
+        x = self.bn5(x)
+        
+        return x + res if x.shape == res.shape else x
 
-class C2f_Star(nn.Module):
+class C3_Star(C2f):
     """
-    YOLO Wrapper for StarBlock.
-    替换原本的 C3k2 或 C2f，用于 Backbone。
+    C3_Star: 适配新版 StarBlock
     """
-    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
-        super().__init__()
-        self.c = int(c2 * e) # hidden channels
-        #以此对齐 YOLO 的 bottleneck 设计
-        self.cv1 = nn.Conv2d(c1, 2 * self.c, 1, 1, bias=False)
-        self.cv2 = nn.Conv2d((2 + n) * self.c, c2, 1) 
-        
-        # 堆叠 n 个 StarBlock
-        # 注意: StarBlock 的 mlp_ratio 源码默认为 3 或 4。
-        # 为了控制参数量，我们在 Nano 模型上可以使用 3 (源码中 starnet_s1 使用的是 3)
-        self.m = nn.ModuleList(StarBlock(self.c, mlp_ratio=3) for _ in range(n))
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5, k=7):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        c_ = self.c 
+        # 🌟 传入 expand=0.5 (硬编码以确保瘦身)
+        # 这样 StarBlock 的计算量约为标准 Bottleneck 的 75%
+        self.m = nn.Sequential(*(StarBlock(c_, c_, k=k, expand=0.5) for _ in range(n)))
 
-    def forward(self, x):
-        # 模仿 C2f 的梯度流逻辑: Split -> Bottles -> Concat
-        y = list(self.cv1(x).chunk(2, 1))
-        y.extend(m(y[-1]) for m in self.m)
-        return self.cv2(torch.cat(y, 1))
+
 
 # ==========================================
 # FasterNet Core Modules (CVPR 2023)
@@ -2691,9 +2686,7 @@ class C2f_GhostV3(nn.Module):
 # ==========================================
 # SGE-Fusion: Semantic-Guided Edge Fusion
 # Custom Design for Small Object Detection (SODA10M)
-# ==========================================
-
-from .conv import DySample
+# ==========================================f
 
 class SGEFusion(nn.Module):
     """
@@ -2927,9 +2920,6 @@ class CSI_Fusion(nn.Module):
         
         return [out3, out4, out5]
 
-
-# 确保文件头有导入
-from .conv import DySample 
 
 class SDC_Gate(nn.Module):
     """

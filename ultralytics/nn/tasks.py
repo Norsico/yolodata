@@ -75,7 +75,6 @@ from ultralytics.nn.modules import (
     FrequencyGate,
     HWD_Down,
     ScConv,
-    C2f_Star,
     C3_Faster,
     LSK_FrequencyGate,
     HFD_Down,
@@ -88,6 +87,8 @@ from ultralytics.nn.modules import (
     Dilated_Rep,
     Semantic_Inject,
     EMA,
+    C3_Star,
+
 )
     
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
@@ -1578,13 +1579,14 @@ def parse_model(d, ch, verbose=True):
             SPDConv,
             HWD_Down,
             ScConv,
-            C2f_Star,
             C3_Faster,
             HFD_Down,
             RFAConv,
             C2f_GhostV3,
             C2_Focal,
             Dilated_Rep,
+            C3_Star,
+
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments
@@ -1604,6 +1606,8 @@ def parse_model(d, ch, verbose=True):
             C2fCIB,
             C2PSA,
             A2C2f,
+            C3_Star,
+
         }
     )
     for i, (f, n, m, args) in enumerate(d["backbone"] + d["head"]):  # from, number, module, args
@@ -1766,7 +1770,12 @@ def parse_model(d, ch, verbose=True):
             args = [*args[1:]]
         else:
             c2 = ch[f]
-
+        # ========== 🐛 Debug Print ==========
+        print(f"\n[Layer {i}] Module: {m.__name__}")
+        print(f"  From: {f}, Args: {args}")
+        print(f"  c1={c1}, c2={c2}")
+        print(f"  Args types: {[type(arg) for arg in args]}")
+        # ====================================
         m_ = torch.nn.Sequential(*(m(*args) for _ in range(n))) if n > 1 else m(*args)  # module
         t = str(m)[8:-2].replace("__main__.", "")  # module type
         m_.np = sum(x.numel() for x in m_.parameters())  # number params
