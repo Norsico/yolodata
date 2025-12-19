@@ -1770,12 +1770,7 @@ def parse_model(d, ch, verbose=True):
             args = [*args[1:]]
         else:
             c2 = ch[f]
-        # ========== 🐛 Debug Print ==========
-        print(f"\n[Layer {i}] Module: {m.__name__}")
-        print(f"  From: {f}, Args: {args}")
-        print(f"  c1={c1}, c2={c2}")
-        print(f"  Args types: {[type(arg) for arg in args]}")
-        # ====================================
+
         m_ = torch.nn.Sequential(*(m(*args) for _ in range(n))) if n > 1 else m(*args)  # module
         t = str(m)[8:-2].replace("__main__.", "")  # module type
         m_.np = sum(x.numel() for x in m_.parameters())  # number params
