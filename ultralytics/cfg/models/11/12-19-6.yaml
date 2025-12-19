@@ -1,0 +1,76 @@
+# =============================================================================
+# YOLOv11n - HighRes Engine (Nuclear Option)
+# Strategy: 
+# 1. P2 High-Res Engine: Fusion & Processing at 160x160 resolution.
+#    (Backbone P2 + Detail Branch) -> C3k2 (Heavy!) -> Downsample.
+# 2. P3 Super Concat: Merge the processed High-Res features into P3.
+# 3. DySample: Keep for stability.
+# Target: Maximum Information Preservation for Tiny Objects (Tricycle).
+# =============================================================================
+
+# Parameters
+nc: 6 
+scales: 
+  n: [0.50, 0.25, 1024] 
+
+# Backbone (Standard)
+backbone:
+  - [-1, 1, Conv, [64, 3, 2]] # 0
+  - [-1, 1, Conv, [128, 3, 2]] # 1-P2/4 (Source A: 160x160)
+  - [-1, 2, C3k2, [256, False, 0.25]] # 2
+  - [-1, 1, Conv, [256, 3, 2]] # 3-P3/8
+  - [-1, 2, C3k2, [512, False, 0.25]] # 4
+  - [-1, 1, Conv, [512, 3, 2]] # 5-P4/16
+  - [-1, 2, C3k2, [512, True]] # 6
+  - [-1, 1, Conv, [1024, 3, 2]] # 7-P5/32
+  - [-1, 2, C3k2, [1024, True]] # 8
+  - [-1, 1, SPPF, [1024, 5]] # 9
+  - [-1, 2, C2PSA, [1024]] # 10
+
+# Head
+head:
+  # === ☢️ High-Res Engine (高分辨率处理引擎) ===
+  # 1. 提取 Detail (160x160)
+  - [1, 1, RFAConv, [128]] # 11 (160x160)
+  
+  # 2. 【关键一步】P2 早期融合
+  # 把 Backbone 的 P2 (1) 和 Detail (11) 拼起来
+  # 此时分辨率是 160x160，保留了所有三轮车的细节
+  - [[1, 11], 1, Concat, [1]] # 12 (128+128 = 256ch)
+
+  # 3. 【算力黑洞】在 160x160 上跑 C3k2
+  # 这一步极其昂贵，但能让网络在降维前充分理解小目标
+  - [-1, 2, C3k2, [256, False, 0.25]] # 13 (Processing at High Res)
+
+  # 4. 下采样对接 P3
+  # 用 stride=2 的 Conv 把处理好的特征送下去
+  - [-1, 1, Conv, [256, 3, 2]] # 14 (Out: 80x80x256)
+
+
+  # === P5 -> P4 ===
+  - [10, 1, DySample, [2, 'lp']] # 15 (From SPPF)
+  - [[-1, 6], 1, Concat, [1]] 
+  - [-1, 2, C3k2, [512, False]] # 17
+
+  # === P4 -> P3 ===
+  - [-1, 1, DySample, [2, 'lp']] # 18 (From P4)
+
+  # === 🚀 Super Concat (三路汇聚) ===
+  # 1. P4_up (语义)
+  # 2. Backbone P3 (原始)
+  # 3. HighRes_Engine Output (14) (经过精细加工的纹理特征)
+  - [[-1, 4, 14], 1, Concat, [1]] # 19
+  
+  # P3 Head (保持 n=2 加厚)
+  - [-1, 2, C3k2, [256, False, 2]] # 20 
+
+  # === Output Path ===
+  - [-1, 1, Conv, [256, 3, 2]] # 21
+  - [[-1, 17], 1, Concat, [1]] 
+  - [-1, 2, C3k2, [512, False]] # 23
+
+  - [-1, 1, Conv, [512, 3, 2]] # 24
+  - [[-1, 10], 1, Concat, [1]] 
+  - [-1, 2, C3k2, [1024, True]] # 26
+
+  - [[20, 23, 26], 1, Detect, [nc]] # 27
