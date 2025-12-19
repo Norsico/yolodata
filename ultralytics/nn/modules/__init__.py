@@ -78,6 +78,8 @@ from .block import (
     Semantic_Inject,
     EMA,
     C3_Star,
+    GSConv,
+    VoVGSCSP,
     
 )
 from .conv import (
@@ -220,4 +222,6 @@ __all__ = (
     "Semantic_Inject",
     "EMA",
     "C3_Star",
+    "GSConv",
+    "VoVGSCSP",
 )

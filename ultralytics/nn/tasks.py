@@ -88,6 +88,8 @@ from ultralytics.nn.modules import (
     Semantic_Inject,
     EMA,
     C3_Star,
+    GSConv,
+    VoVGSCSP,
 
 )
     
@@ -1586,7 +1588,8 @@ def parse_model(d, ch, verbose=True):
             C2_Focal,
             Dilated_Rep,
             C3_Star,
-
+            GSConv,
+            VoVGSCSP,
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments
@@ -1607,7 +1610,7 @@ def parse_model(d, ch, verbose=True):
             C2PSA,
             A2C2f,
             C3_Star,
-
+            VoVGSCSP
         }
     )
     for i, (f, n, m, args) in enumerate(d["backbone"] + d["head"]):  # from, number, module, args
