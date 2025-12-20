@@ -80,7 +80,8 @@ from .block import (
     C3_Star,
     GSConv,
     VoVGSCSP,
-    
+    DBB_Lite,
+
 )
 from .conv import (
     CBAM,
@@ -224,4 +225,6 @@ __all__ = (
     "C3_Star",
     "GSConv",
     "VoVGSCSP",
+    "DBB_Lite",
+    
 )

@@ -3163,4 +3163,140 @@ class VoVGSCSP(nn.Module):
 # ================== GSConv Modules End ==================
 
 
+class DBB_Lite(nn.Module):
+    """
+    Diverse Branch Block Lite (Reparameterization Module)
+    Reference: YOLOv8-QSD Paper & RepVGG
+    Training: 3x3 Conv + 1x1 Conv + Identity
+    Inference: Single 3x3 Conv
+    """
+    def __init__(self, c1, c2, k=3, s=1, p=None, g=1, act=True):
+        super().__init__()
+        self.c1 = c1
+        self.c2 = c2
+        self.k = k
+        self.s = s
+        self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
+        
+        # padding 自动计算
+        padding = k // 2 if p is None else p
+        
+        # === 训练时的三个分支 ===
+        # 1. 主分支 3x3
+        self.rbr_dense = nn.Sequential(
+            nn.Conv2d(c1, c2, k, s, padding=padding, groups=g, bias=False),
+            nn.BatchNorm2d(c2)
+        )
+        # 2. 1x1 分支 (仅当 k>1 时存在)
+        self.rbr_1x1 = nn.Sequential(
+            nn.Conv2d(c1, c2, 1, s, padding=0, groups=g, bias=False),
+            nn.BatchNorm2d(c2)
+        ) if k > 1 else None
+        
+        # 3. Identity 分支 (仅当通道相同且 stride=1 时存在)
+        # 注意：这里我们用 BatchNorm2d 来模拟带权重的 Identity，因为 BN 包含可学习的 gamma/beta
+        self.rbr_identity = nn.BatchNorm2d(c1) if c2 == c1 and s == 1 else None
+        
+        # 推理时的参数容器
+        self.rbr_reparam = None
+        self.deploy = False
 
+    def forward(self, inputs):
+        # 如果已经切换到部署模式，直接用融合后的卷积
+        if self.deploy:
+            return self.act(self.rbr_reparam(inputs))
+            
+        # === 训练时的前向传播 ===
+        # 3x3 输出
+        out = self.rbr_dense(inputs)
+        
+        # 加上 1x1 输出
+        if self.rbr_1x1 is not None:
+            out += self.rbr_1x1(inputs)
+            
+        # 加上 Identity 输出
+        if self.rbr_identity is not None:
+            out += self.rbr_identity(inputs)
+        
+        return self.act(out)
+
+    def switch_to_deploy(self):
+        """将多分支权重融合为一个卷积，用于推理"""
+        if self.deploy: return
+        
+        # 计算等效的 Kernel 和 Bias
+        kernel, bias = self.get_equivalent_kernel_bias()
+        
+        # 创建新的单层卷积
+        self.rbr_reparam = nn.Conv2d(
+            self.c1, self.c2, self.k, self.s, 
+            padding=self.k//2, bias=True
+        ).to(self.rbr_dense[0].weight.device)
+        
+        # 赋值权重
+        self.rbr_reparam.weight.data = kernel
+        self.rbr_reparam.bias.data = bias
+        
+        # 删除原分支以节省显存
+        self.__delattr__('rbr_dense')
+        if hasattr(self, 'rbr_1x1'): self.__delattr__('rbr_1x1')
+        if hasattr(self, 'rbr_identity'): self.__delattr__('rbr_identity')
+        self.deploy = True
+
+    def get_equivalent_kernel_bias(self):
+        # 1. 获取 3x3 分支的融合权重
+        k3, b3 = self._fuse_bn_tensor(self.rbr_dense)
+        
+        # 2. 获取 1x1 分支的融合权重
+        k1, b1 = self._fuse_bn_tensor(self.rbr_1x1) if self.rbr_1x1 else (0, 0)
+        
+        # 3. 获取 Identity 分支的融合权重
+        kid, bid = self._fuse_bn_tensor(self.rbr_identity) if self.rbr_identity else (0, 0)
+        
+        # 4. 关键步骤：将 1x1 核填充为 3x3 (在中心补0)
+        if isinstance(k1, torch.Tensor):
+            pad = (self.k - 1) // 2
+            k1 = F.pad(k1, [pad, pad, pad, pad])
+            
+        # 5. 相加所有权重
+        return k3 + k1 + kid, b3 + b1 + bid
+
+    def _fuse_bn_tensor(self, branch):
+        """
+        核心逻辑：将 Conv+BN (或纯 BN) 融合成 (Kernel, Bias)
+        数学原理：W' = W * (gamma / std), b' = beta - mean * (gamma / std)
+        """
+        if branch is None: return 0, 0
+        
+        if isinstance(branch, nn.Sequential):
+            # 处理 Conv + BN
+            kernel = branch[0].weight
+            running_mean = branch[1].running_mean
+            running_var = branch[1].running_var
+            gamma = branch[1].weight
+            beta = branch[1].bias
+            eps = branch[1].eps
+        else:
+            # 处理 Identity (也就是只有 BN 层)
+            assert isinstance(branch, nn.BatchNorm2d)
+            if not hasattr(self, 'id_tensor'):
+                # 构造一个 Identity 卷积核 (中心为1，其余为0)
+                input_dim = self.c1 // branch.groups
+                kernel_value = torch.zeros((self.c1, input_dim, 3, 3), 
+                                         dtype=branch.weight.dtype, 
+                                         device=branch.weight.device)
+                for i in range(self.c1):
+                    kernel_value[i, i % input_dim, 1, 1] = 1
+                self.id_tensor = kernel_value
+            
+            kernel = self.id_tensor
+            running_mean = branch.running_mean
+            running_var = branch.running_var
+            gamma = branch.weight
+            beta = branch.bias
+            eps = branch.eps
+            
+        std = (running_var + eps).sqrt()
+        t = (gamma / std).reshape(-1, 1, 1, 1)
+        
+        return kernel * t, beta - running_mean * gamma / std

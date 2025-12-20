@@ -90,6 +90,7 @@ from ultralytics.nn.modules import (
     C3_Star,
     GSConv,
     VoVGSCSP,
+    DBB_Lite,
 
 )
     
@@ -1589,7 +1590,7 @@ def parse_model(d, ch, verbose=True):
             Dilated_Rep,
             C3_Star,
             GSConv,
-            VoVGSCSP,
+            VoVGSCSP
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments
@@ -1656,6 +1657,11 @@ def parse_model(d, ch, verbose=True):
             # 如果 YAML 是 [], args 变成 [c1, c2] -> 使用默认 factor=32
             # 如果 YAML 是 [8], args 变成 [c1, c2, 8] -> 使用 factor=8
             args = [c1, c2, *args]
+
+        elif m is DBB_Lite:
+            c1 = ch[f]
+            c2 = args[0] # 强制使用 YAML 写的 128，不乘 width
+            args = [c1, c2, *args[1:]]
 
         # ================== CSI_Fusion ==================
         elif m is CSI_Fusion:
