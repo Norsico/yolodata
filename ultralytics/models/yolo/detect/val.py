@@ -278,23 +278,23 @@ class DetectionValidator(BaseValidator):
         if self.metrics.nt_per_class.sum() == 0:
             LOGGER.warning(f"no labels found in {self.args.task} set, can not compute metrics without labels")
 
-        # 🔥 增强版：打印每个类别的详细指标
-        if self.args.verbose and not self.training and self.nc > 1 and len(self.metrics.stats):
-            # 打印表头（更清晰）
+        # 🔥 修改：移除 "not self.training" 条件，训练时也打印
+        if self.args.verbose and self.nc > 1 and len(self.metrics.stats):
+            # 打印表头
             LOGGER.info("\n" + "=" * 100)
             LOGGER.info("📊 Per-Class Detection Metrics:")
             LOGGER.info("=" * 100)
             LOGGER.info(f"{'Class':<20} {'Images':>10} {'Instances':>10} {'P':>10} {'R':>10} {'mAP50':>10} {'mAP50-95':>12}")
             LOGGER.info("-" * 100)
             
-            # 打印每个类别（原有逻辑，但格式化输出）
+            # 打印每个类别
             for i, c in enumerate(self.metrics.ap_class_index):
                 class_name = self.names[c]
                 images = self.metrics.nt_per_image[c]
                 instances = self.metrics.nt_per_class[c]
                 p, r, map50, map50_95 = self.metrics.class_result(i)
                 
-                # 高亮 Tricycle（如果存在）
+                # 高亮 Tricycle
                 prefix = "🚲 " if "Tricycle" in class_name or "tricycle" in class_name.lower() else "   "
                 
                 LOGGER.info(
@@ -304,9 +304,9 @@ class DetectionValidator(BaseValidator):
             
             LOGGER.info("=" * 100)
         
-        # 🔥 新增：即使不是 verbose 模式，也打印关键类别（Tricycle）
-        elif not self.training and self.nc > 1 and len(self.metrics.stats):
-            # 找到 Tricycle 的索引
+        # 🔥 新增：即使不是 verbose 模式，也打印 Tricycle（训练时也生效）
+        elif self.nc > 1 and len(self.metrics.stats):
+            # 找到 Tricycle
             tricycle_idx = None
             for i, c in enumerate(self.metrics.ap_class_index):
                 if "Tricycle" in self.names[c] or "tricycle" in self.names[c].lower():
