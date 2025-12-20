@@ -251,6 +251,26 @@ class DetectionValidator(BaseValidator):
         self.metrics.clear_stats()
         return self.metrics.results_dict
 
+    # def print_results(self) -> None:
+    #     """Print training/validation set metrics per class."""
+    #     pf = "%22s" + "%11i" * 2 + "%11.3g" * len(self.metrics.keys)  # print format
+    #     LOGGER.info(pf % ("all", self.seen, self.metrics.nt_per_class.sum(), *self.metrics.mean_results()))
+    #     if self.metrics.nt_per_class.sum() == 0:
+    #         LOGGER.warning(f"no labels found in {self.args.task} set, can not compute metrics without labels")
+
+    #     # Print results per class
+    #     if self.args.verbose and not self.training and self.nc > 1 and len(self.metrics.stats):
+    #         for i, c in enumerate(self.metrics.ap_class_index):
+    #             LOGGER.info(
+    #                 pf
+    #                 % (
+    #                     self.names[c],
+    #                     self.metrics.nt_per_image[c],
+    #                     self.metrics.nt_per_class[c],
+    #                     *self.metrics.class_result(i),
+    #                 )
+    #             )
+
     def print_results(self) -> None:
         """Print training/validation set metrics per class."""
         pf = "%22s" + "%11i" * 2 + "%11.3g" * len(self.metrics.keys)  # print format
@@ -258,18 +278,49 @@ class DetectionValidator(BaseValidator):
         if self.metrics.nt_per_class.sum() == 0:
             LOGGER.warning(f"no labels found in {self.args.task} set, can not compute metrics without labels")
 
-        # Print results per class
+        # 🔥 增强版：打印每个类别的详细指标
         if self.args.verbose and not self.training and self.nc > 1 and len(self.metrics.stats):
+            # 打印表头（更清晰）
+            LOGGER.info("\n" + "=" * 100)
+            LOGGER.info("📊 Per-Class Detection Metrics:")
+            LOGGER.info("=" * 100)
+            LOGGER.info(f"{'Class':<20} {'Images':>10} {'Instances':>10} {'P':>10} {'R':>10} {'mAP50':>10} {'mAP50-95':>12}")
+            LOGGER.info("-" * 100)
+            
+            # 打印每个类别（原有逻辑，但格式化输出）
             for i, c in enumerate(self.metrics.ap_class_index):
+                class_name = self.names[c]
+                images = self.metrics.nt_per_image[c]
+                instances = self.metrics.nt_per_class[c]
+                p, r, map50, map50_95 = self.metrics.class_result(i)
+                
+                # 高亮 Tricycle（如果存在）
+                prefix = "🚲 " if "Tricycle" in class_name or "tricycle" in class_name.lower() else "   "
+                
                 LOGGER.info(
-                    pf
-                    % (
-                        self.names[c],
-                        self.metrics.nt_per_image[c],
-                        self.metrics.nt_per_class[c],
-                        *self.metrics.class_result(i),
-                    )
+                    f"{prefix}{class_name:<17} {images:>10} {instances:>10} "
+                    f"{p:>10.4f} {r:>10.4f} {map50:>10.4f} {map50_95:>12.4f}"
                 )
+            
+            LOGGER.info("=" * 100)
+        
+        # 🔥 新增：即使不是 verbose 模式，也打印关键类别（Tricycle）
+        elif not self.training and self.nc > 1 and len(self.metrics.stats):
+            # 找到 Tricycle 的索引
+            tricycle_idx = None
+            for i, c in enumerate(self.metrics.ap_class_index):
+                if "Tricycle" in self.names[c] or "tricycle" in self.names[c].lower():
+                    tricycle_idx = i
+                    break
+            
+            if tricycle_idx is not None:
+                c = self.metrics.ap_class_index[tricycle_idx]
+                p, r, map50, map50_95 = self.metrics.class_result(tricycle_idx)
+                LOGGER.info(
+                    f"\n🚲 Tricycle: mAP50={map50:.4f}, mAP50-95={map50_95:.4f}, "
+                    f"P={p:.4f}, R={r:.4f}, Instances={self.metrics.nt_per_class[c]}"
+                )
+
 
     def _process_batch(self, preds: dict[str, torch.Tensor], batch: dict[str, Any]) -> dict[str, np.ndarray]:
         """Return correct prediction matrix.
