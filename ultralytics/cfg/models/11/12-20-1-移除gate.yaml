@@ -1,0 +1,66 @@
+# =============================================================================
+# YOLOv11n - Solid Fusion (Back to Basics)
+# Base: 12-13-2
+# Change 1: Restore Detail Branch to 128 channels (Essential for Tricycle).
+# Change 2: REPLACE FrequencyGate with [Concat + C3k2].
+#           - Gate might be filtering out weak Tricycle features as "noise".
+#           - Concat preserves EVERYTHING.
+#           - Added C3k2 learns how to mix them properly.
+# =============================================================================
+# 🧠 参数量 (Params): 2.65 M
+# 💻 计算量 (GFLOPs): 7.55
+# Parameters
+nc: 6 
+scales: 
+  n: [0.50, 0.25, 1024] 
+
+# Backbone (Standard)
+backbone:
+  - [-1, 1, Conv, [64, 3, 2]] # 0
+  - [-1, 1, Conv, [128, 3, 2]] # 1-P2/4 (Source: 160x160)
+  - [-1, 2, C3k2, [256, False, 0.25]] # 2
+  - [-1, 1, Conv, [256, 3, 2]] # 3-P3/8
+  - [-1, 2, C3k2, [512, False, 0.25]] # 4
+  - [-1, 1, Conv, [512, 3, 2]] # 5-P4/16
+  - [-1, 2, C3k2, [512, True]] # 6
+  - [-1, 1, Conv, [1024, 3, 2]] # 7-P5/32
+  - [-1, 2, C3k2, [1024, True]] # 8
+  - [-1, 1, SPPF, [1024, 5]] # 9
+  - [-1, 2, C2PSA, [1024]] # 10
+
+# Head
+head:
+  # === P5 -> P4 (DySample) ===
+  - [10, 1, DySample, [2, 'lp']] # 11
+  - [[-1, 6], 1, Concat, [1]] 
+  - [-1, 2, C3k2, [512, False]] # 13
+
+  # === P4 -> P3 (DySample) ===
+  - [-1, 1, DySample, [2, 'lp']] # 14
+  - [[-1, 4], 1, Concat, [1]] 
+  - [-1, 2, C3k2, [256, False]] # 16 (P3 Main Body)
+
+  # === 🛡️ Solid Detail Branch (128ch) ===
+  # 恢复 128 通道，保证信息量
+  - [1, 1, RFAConv, [128]] # 17 (160x160)
+  - [-1, 1, Conv, [128, 3, 2]] # 18 (80x80)
+
+  # === 🧨 The Mixer (取代 Gate) ===
+  # 1. 拼接: P3(256) + Detail(128) = 384 ch
+  - [[16, 18], 1, Concat, [1]] # 19
+  
+  # 2. 融合: 用 C3k2 强制学习特征关系 (核心差异点)
+  #    Gate 只是加权，C3k2 是重组。
+  - [-1, 2, C3k2, [256, False]] # 20 (Fusion Output)
+
+  # === Output Path ===
+  - [20, 1, Conv, [256, 3, 2]] # 21
+  - [[-1, 13], 1, Concat, [1]] 
+  - [-1, 2, C3k2, [512, False]] # 23
+
+  - [-1, 1, Conv, [512, 3, 2]] # 24
+  - [[-1, 10], 1, Concat, [1]] 
+  - [-1, 2, C3k2, [1024, True]] # 26
+
+  # Detect using the Fused P3 (Layer 20)
+  - [[20, 23, 26], 1, Detect, [nc]] # 27
