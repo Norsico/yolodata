@@ -2131,42 +2131,38 @@ class SPDConv(nn.Module):
 
 class FrequencyGate(nn.Module):
     """
-    Frequency-aware Dynamic Fusion (Optimized Version)
-    优化版: 使用 DWConv 降低计算量
+    FD-YOLO 核心组件: 频率门控融合模块
+    论文卖点: "Frequency-aware Dynamic Fusion"
     """
     def __init__(self, c_sem, c_detail, c_out):
         super().__init__()
-        # 1. 门控生成器 (轻量化)
+        # c_sem: 主干 P3 的通道数 (通常 256)
+        # c_detail: 细节分支的通道数 (我们设为 128)
+        # c_out: 融合后输出的通道数 (保持 256)
+        
+        # 1. 门控生成器: 用语义信息判断哪里是物体
         self.gate_gen = nn.Sequential(
-            # 先降维，减少计算
-            nn.Conv2d(c_sem, c_detail, 1, bias=False),
-            nn.BatchNorm2d(c_detail),
+            nn.Conv2d(c_sem, c_sem // 2, 1),
+            nn.BatchNorm2d(c_sem // 2),
             nn.SiLU(),
-            # DWConv 提取上下文，不增加太多 FLOPs
-            nn.Conv2d(c_detail, c_detail, 3, 1, 1, groups=c_detail, bias=False), 
-            nn.Sigmoid() 
+            nn.Conv2d(c_sem // 2, c_detail, 1), # 输出通道对齐 detail
+            nn.Sigmoid() # 生成 0~1 的 mask
         )
         
-        # 2. 融合层 (输入是 c_sem + c_detail)
-        # 这里是计算量大头，我们先用 1x1 融合，再用 DW 混洗
+        # 2. 融合层
         self.fusion = nn.Sequential(
             nn.Conv2d(c_sem + c_detail, c_out, 1, bias=False),
-            nn.BatchNorm2d(c_out),
-            # 可选: 加一个 DWConv 增强融合效果
-            nn.Conv2d(c_out, c_out, 3, 1, 1, groups=c_out, bias=False),
             nn.BatchNorm2d(c_out),
             nn.SiLU()
         )
 
     def forward(self, x):
-        x_sem, x_detail = x # 解包
+        # 🚀 关键修改: YOLO 传进来的是一个列表，我们手动解包
+        x_sem, x_detail = x 
         
-        # 计算 Gate
+        # 下面保持不变
         gate = self.gate_gen(x_sem)
-        # 门控机制：只允许有效的 Detail 通过
         x_detail_clean = x_detail * gate
-        
-        # 融合
         return self.fusion(torch.cat([x_sem, x_detail_clean], dim=1))
 
 # 如果之前的 HWD 代码删了，这里是一个极简版，直接加进去
