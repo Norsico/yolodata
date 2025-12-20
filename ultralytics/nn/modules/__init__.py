@@ -81,6 +81,8 @@ from .block import (
     GSConv,
     VoVGSCSP,
     DBB_Lite,
+    LiteFrequencyGate,
+    C3k2_Star,
 
 )
 from .conv import (
@@ -226,5 +228,7 @@ __all__ = (
     "GSConv",
     "VoVGSCSP",
     "DBB_Lite",
-    
+    "LiteFrequencyGate",
+    "C3k2_Star",
+
 )

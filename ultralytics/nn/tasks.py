@@ -91,7 +91,8 @@ from ultralytics.nn.modules import (
     GSConv,
     VoVGSCSP,
     DBB_Lite,
-
+    LiteFrequencyGate,
+    C3k2_Star,
 )
     
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
@@ -1590,7 +1591,8 @@ def parse_model(d, ch, verbose=True):
             Dilated_Rep,
             C3_Star,
             GSConv,
-            VoVGSCSP
+            VoVGSCSP,
+            C3k2_Star
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments
@@ -1611,7 +1613,8 @@ def parse_model(d, ch, verbose=True):
             C2PSA,
             A2C2f,
             C3_Star,
-            VoVGSCSP
+            VoVGSCSP,
+            C3k2_Star
         }
     )
     for i, (f, n, m, args) in enumerate(d["backbone"] + d["head"]):  # from, number, module, args
@@ -1702,25 +1705,33 @@ def parse_model(d, ch, verbose=True):
             # Semantic_Inject 的输出通道数等于 c_high (它把语义注入到了高分流中)
             c2 = c_high
 
-        # ================== SDC_Gate / FrequencyGate 通用解析逻辑 ==================
-        elif m in {FrequencyGate, LSK_FrequencyGate, SDC_Gate}:
+        # ================== SDC_Gate / FrequencyGate / Lite 兼容解析逻辑 ==================
+        elif m in {FrequencyGate, LSK_FrequencyGate, SDC_Gate, LiteFrequencyGate}:
             # f 是来源层列表，例如 [16, 17] -> [P3, Detail]
-            # args 是 YAML 里的参数，例如 [128, 256] -> [c_detail_hint, c_out]
             
             # 1. 自动从 ch 列表中获取真实的输入通道数
-            c_sem = ch[f[0]]     # 主语义流 (P3) 真实通道数
-            c_detail = ch[f[1]]  # 细节流 (Detail) 真实通道数
+            c_sem = ch[f[0]]     # P3 语义流
+            c_detail = ch[f[1]]  # Detail 细节流
             
-            # 2. 获取输出通道数 (YAML 中第二个参数)
-            c_out = args[1]
+            # 2. 智能获取 c_out (兼容不同写法的 YAML)
+            if len(args) > 1:
+                # 情况 A: YAML 写了 [hint, c_out]，比如旧版 FrequencyGate
+                c_out = args[1]
+            elif len(args) == 1:
+                # 情况 B: YAML 只写了 [c_out]，比如 LiteFrequencyGate
+                c_out = args[0]
+            else:
+                # 情况 C: YAML 为空 []，默认输出通道等于细节通道
+                c_out = c_detail
             
-            # 3. 重组参数传给 __init__(self, c_sem, c_detail, c_out)
-            # 这三个类的初始化参数顺序都是一样的，所以通用
+            # 3. 重组参数传给 __init__
+            # 你的 LiteFrequencyGate 定义是 (c_sem, c_detail, c_out)
             args = [c_sem, c_detail, c_out]
             
-            # 4. 更新当前层的输出通道数 c2，供下一层使用
+            # 4. 更新 c2
             c2 = c_out
-        # =========================================================================
+        # ===============================================================================
+
 
 
         elif m is AIFI:

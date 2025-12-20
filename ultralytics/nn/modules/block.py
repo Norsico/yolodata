@@ -3300,3 +3300,99 @@ class DBB_Lite(nn.Module):
         t = (gamma / std).reshape(-1, 1, 1, 1)
         
         return kernel * t, beta - running_mean * gamma / std
+
+
+class LiteFrequencyGate(nn.Module):
+    """
+    Lite Version of FrequencyGate
+    Paper Idea: "Channel-Aligned Frequency Fusion"
+    1. Align Semantics to Detail channels.
+    2. Spatial Gate on Semantics.
+    3. Weighted Add (instead of Concat).
+    """
+    def __init__(self, c_sem, c_detail, c_out=None):
+        super().__init__()
+        # 如果 c_out 没指定，默认保持和 detail 一致，这样最省参数
+        self.c_out = c_detail if c_out is None else c_out
+        
+        # 1. 通道对齐 (语义 -> 细节)
+        self.align = nn.Conv2d(c_sem, c_detail, 1, 1, bias=False) if c_sem != c_detail else nn.Identity()
+        self.align_bn = nn.BatchNorm2d(c_detail) if c_sem != c_detail else nn.Identity()
+
+        # 2. 门控生成 (基于 Sem 生成 Gate)
+        # DWConv 提取上下文，Sigmoid 生成 0~1 权重
+        self.gate_gen = nn.Sequential(
+            nn.Conv2d(c_detail, c_detail, 3, 1, 1, groups=c_detail, bias=False),
+            nn.BatchNorm2d(c_detail),
+            nn.Sigmoid() 
+        )
+        
+        # 3. 输出调整 (如果需要改变输出通道)
+        self.output_conv = nn.Sequential(
+            nn.Conv2d(c_detail, self.c_out, 1, 1, bias=False),
+            nn.BatchNorm2d(self.c_out),
+            nn.SiLU()
+        ) if self.c_out != c_detail else nn.Identity()
+
+    def forward(self, x):
+        # x[0]: Semantics (256), x[1]: Detail (128)
+        x_sem, x_detail = x 
+        
+        # 1. 对齐语义特征到细节特征的维度
+        sem_aligned = self.align_bn(self.align(x_sem))
+        
+        # 2. 生成门控 (Sem 决定 Detail 哪里重要)
+        gate = self.gate_gen(sem_aligned)
+        
+        # 3. 核心融合：加权加法 (比 Concat 更纯净，噪声更少)
+        # 逻辑：Detail 是基础，Sem 提供门控权重，最后两者叠加
+        x_fused = x_detail + (sem_aligned * gate)
+        
+        return self.output_conv(x_fused)
+
+
+class StarBottleneck(nn.Module):
+    """
+    StarNet Bottleneck: Element-wise Multiplication for High-Order Features.
+    CVPR 2024 style. Low params, high semantic capacity.
+    """
+    def __init__(self, c1, c2, kernel_size=3, expand=4): # expand 默认改小一点适应 Nano
+        super().__init__()
+        hidden_dim = int(c1 * expand)
+        
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(c1, hidden_dim, 1, bias=False),
+            nn.BatchNorm2d(hidden_dim)
+        )
+        
+        self.conv2 = nn.Sequential(
+            # DWConv
+            nn.Conv2d(hidden_dim, hidden_dim, kernel_size, 1, kernel_size//2, groups=hidden_dim, bias=False),
+            nn.BatchNorm2d(hidden_dim)
+        )
+        
+        self.conv3 = nn.Sequential(
+            nn.Conv2d(hidden_dim, c2, 1, bias=False),
+            nn.BatchNorm2d(c2)
+        )
+        
+        self.act = nn.ReLU6() # StarNet 使用 ReLU6
+
+    def forward(self, x):
+        x_in = self.conv1(x)
+        # Star Operation: (DW + BN) * (DW + BN) -> Element-wise Multi
+        # 这里简化为 conv2(x) * x，类似于 Gated Linear Unit
+        x_out = self.conv2(x_in) * x_in 
+        x_out = self.act(x_out)
+        return self.conv3(x_out)
+
+class C3k2_Star(C3k2):
+    """
+    Inherits from C3k2 but uses StarBottleneck.
+    """
+    def __init__(self, c1, c2, n=1, c3k=False, e=0.5, g=1, shortcut=True):
+        super().__init__(c1, c2, n, c3k, e, g, shortcut)
+        c_ = int(c2 * e)
+        # 强制替换 self.m
+        self.m = nn.Sequential(*(StarBottleneck(c_, c_, expand=3) for _ in range(n)))
+
