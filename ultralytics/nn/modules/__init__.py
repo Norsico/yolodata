@@ -83,6 +83,7 @@ from .block import (
     DBB_Lite,
     LiteFrequencyGate,
     C3k2_Star,
+    SepFrequencyGate,
 
 )
 from .conv import (
@@ -230,5 +231,6 @@ __all__ = (
     "DBB_Lite",
     "LiteFrequencyGate",
     "C3k2_Star",
-
+    "SepFrequencyGate",
+    
 )

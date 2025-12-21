@@ -3392,3 +3392,39 @@ class C3k2_Star(C3k2):
         # 强制替换 self.m
         self.m = nn.Sequential(*(StarBottleneck(c_, c_, expand=3) for _ in range(n)))
 
+class SepFrequencyGate(nn.Module):
+    """
+    Separable Frequency Gate
+    保留 12-13-2 的Concat逻辑，但用 DW+PW 卷积替代大卷积，大幅降低 FLOPs。
+    """
+    def __init__(self, c_sem, c_detail, c_out):
+        super().__init__()
+        # 1. 门控 (保持不变)
+        self.gate_gen = nn.Sequential(
+            nn.Conv2d(c_sem, c_detail, 1, bias=False),
+            nn.BatchNorm2d(c_detail),
+            nn.SiLU(),
+            nn.Conv2d(c_detail, c_detail, 3, 1, 1, groups=c_detail, bias=False),
+            nn.Sigmoid() 
+        )
+        
+        # 2. 融合 (关键修改: 普通Conv -> DW + PW)
+        c_mixed = c_sem + c_detail
+        self.fusion = nn.Sequential(
+            # DWConv: 负责混合空间信息
+            nn.Conv2d(c_mixed, c_mixed, 3, 1, 1, groups=c_mixed, bias=False),
+            nn.BatchNorm2d(c_mixed),
+            nn.SiLU(),
+            # PWConv: 负责压缩/映射通道
+            nn.Conv2d(c_mixed, c_out, 1, bias=False),
+            nn.BatchNorm2d(c_out),
+            nn.SiLU()
+        )
+
+    def forward(self, x):
+        x_sem, x_detail = x
+        gate = self.gate_gen(x_sem)
+        x_detail_clean = x_detail * gate
+        # 依然使用 Concat，保证特征不丢失
+        return self.fusion(torch.cat([x_sem, x_detail_clean], dim=1))
+

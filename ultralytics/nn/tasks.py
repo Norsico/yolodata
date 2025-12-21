@@ -93,6 +93,7 @@ from ultralytics.nn.modules import (
     DBB_Lite,
     LiteFrequencyGate,
     C3k2_Star,
+    SepFrequencyGate,
 )
     
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
@@ -1704,9 +1705,9 @@ def parse_model(d, ch, verbose=True):
             
             # Semantic_Inject 的输出通道数等于 c_high (它把语义注入到了高分流中)
             c2 = c_high
-
-        # ================== SDC_Gate / FrequencyGate / Lite 兼容解析逻辑 ==================
-        elif m in {FrequencyGate, LSK_FrequencyGate, SDC_Gate, LiteFrequencyGate}:
+        # ================== 兼容解析逻辑 ==================
+        # 🚀 修改点：把 SepFrequencyGate 加到这里面
+        elif m in {FrequencyGate, LSK_FrequencyGate, SDC_Gate, LiteFrequencyGate, SepFrequencyGate}:
             # f 是来源层列表，例如 [16, 17] -> [P3, Detail]
             
             # 1. 自动从 ch 列表中获取真实的输入通道数
@@ -1714,6 +1715,7 @@ def parse_model(d, ch, verbose=True):
             c_detail = ch[f[1]]  # Detail 细节流
             
             # 2. 智能获取 c_out (兼容不同写法的 YAML)
+            # 你的 YAML 写的是 [128, 256]，所以 len(args) > 1，会取 args[1] 作为 c_out
             if len(args) > 1:
                 # 情况 A: YAML 写了 [hint, c_out]，比如旧版 FrequencyGate
                 c_out = args[1]
@@ -1725,13 +1727,12 @@ def parse_model(d, ch, verbose=True):
                 c_out = c_detail
             
             # 3. 重组参数传给 __init__
-            # 你的 LiteFrequencyGate 定义是 (c_sem, c_detail, c_out)
+            # 构造函数的签名都是 (c_sem, c_detail, c_out)
             args = [c_sem, c_detail, c_out]
             
             # 4. 更新 c2
             c2 = c_out
         # ===============================================================================
-
 
 
         elif m is AIFI:
