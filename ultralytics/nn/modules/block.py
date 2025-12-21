@@ -3428,3 +3428,79 @@ class SepFrequencyGate(nn.Module):
         # 依然使用 Concat，保证特征不丢失
         return self.fusion(torch.cat([x_sem, x_detail_clean], dim=1))
 
+
+
+class SGHBSGate(nn.Module):
+    """
+    Self-Guided Hierarchical Background Smoothing Gate
+    - 目标：tiny object 友好融合
+    - 核心：前景保细节、背景做平滑（SET: HBS 的思想），但不依赖 GT mask
+    - 接口设计：与 FrequencyGate 一致，便于 YAML 直接替换
+    """
+
+    def __init__(self, c_sem: int, c_detail: int, c_out: int,
+                 r: int = 4, smooth_k: int = 5):
+        """
+        Args:
+            c_sem: 语义流通道（通常 256）
+            c_detail: detail 分支通道（通常 128）
+            c_out: 输出通道（通常 256）
+            r: 背景平滑的通道压缩比（越大越“抹高频”）
+            smooth_k: 背景平滑核大小（P3/8 用 5 很常见）
+        """
+        super().__init__()
+        c_mid = max(c_sem // 2, 16)
+        c_red = max(c_detail // r, 8)
+
+        # 1) Channel gate：语义 -> (B, c_detail, H, W) 乘性门控（你已验证有效）
+        self.ch_gate = nn.Sequential(
+            nn.Conv2d(c_sem, c_mid, 1, bias=False),
+            nn.BatchNorm2d(c_mid),
+            nn.SiLU(),
+            nn.Conv2d(c_mid, c_detail, 1, bias=True),
+            nn.Sigmoid()
+        )
+
+        # 2) Spatial mask：语义 -> (B, 1, H, W) 前景/背景分离（自引导）
+        self.spa_mask = nn.Sequential(
+            nn.Conv2d(c_sem, 1, 1, bias=True),
+            nn.Sigmoid()
+        )
+
+        # 3) Background smoothing：通道压缩 + DWConv 平滑 + 通道恢复
+        #    这对应 SET 的 HBS “压缩再展开使高频难以恢复”的精神，但做成可推理版本。:contentReference[oaicite:4]{index=4}
+        pad = smooth_k // 2
+        self.bg_smooth = nn.Sequential(
+            nn.Conv2d(c_detail, c_red, 1, bias=False),
+            nn.BatchNorm2d(c_red),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(c_red, c_red, smooth_k, 1, pad, groups=c_red, bias=False),
+            nn.BatchNorm2d(c_red),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(c_red, c_detail, 1, bias=False),
+            nn.BatchNorm2d(c_detail)
+        )
+
+        # 4) Fusion：concat(sem, detail_enh) -> c_out
+        self.fusion = nn.Sequential(
+            nn.Conv2d(c_sem + c_detail, c_out, 1, bias=False),
+            nn.BatchNorm2d(c_out),
+            nn.SiLU()
+        )
+
+    def forward(self, x):
+        x_sem, x_detail = x
+
+        # 乘性门控（保留你现在的“关键有效性”）
+        g = self.ch_gate(x_sem)                # (B, c_detail, H, W)
+        d = x_detail * g
+
+        # 自引导前景 mask（不需要 GT）
+        m = self.spa_mask(x_sem)               # (B, 1, H, W)
+        # 背景平滑（只让背景走 smooth，前景保留原细节）
+        d_s = self.bg_smooth(d)
+        d_enh = m * d + (1.0 - m) * d_s
+
+        return self.fusion(torch.cat([x_sem, d_enh], dim=1))
+
+

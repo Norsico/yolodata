@@ -84,7 +84,7 @@ from .block import (
     LiteFrequencyGate,
     C3k2_Star,
     SepFrequencyGate,
-
+    SGHBSGate,
 )
 from .conv import (
     CBAM,
@@ -232,5 +232,6 @@ __all__ = (
     "LiteFrequencyGate",
     "C3k2_Star",
     "SepFrequencyGate",
+    "SGHBSGate",
     
 )
