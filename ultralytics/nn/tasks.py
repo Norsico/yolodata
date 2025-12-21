@@ -95,6 +95,7 @@ from ultralytics.nn.modules import (
     C3k2_Star,
     SepFrequencyGate,
     SGHBSGate,
+    HFEnhance,
 )
     
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
@@ -1767,6 +1768,29 @@ def parse_model(d, ch, verbose=True):
             args = [c1, *args]
         # ==================== 新增代码结束 ====================
 
+        # ==================== HFEnhance ====================
+        elif m is HFEnhance:
+            c1 = ch[f]
+            c2 = c1  # HFEnhance 不改变通道数
+
+            # 推荐 YAML 写法：
+            #   - [-1, 1, HFEnhance, []]      -> 默认 k=3
+            #   - [-1, 1, HFEnhance, [5]]     -> 指定 k=5
+            #
+            # 兼容你之前写的 [128]（把它当成“无效/冗余”，自动忽略）
+            if len(args) == 0:
+                args = [c1]  # 只传通道，使用默认 k=3
+            elif len(args) == 1:
+                # 如果用户写的是 [3]/[5]/[7] 这种，就当成 k
+                if isinstance(args[0], int) and args[0] in {3, 5, 7, 9, 11}:
+                    args = [c1, args[0]]
+                else:
+                    # 像 [128] 这种，直接忽略，避免误伤
+                    args = [c1]
+            else:
+                # 如果写了多个参数，就把 c1 放到最前面
+                args = [c1, *args]
+        # ==================== HFEnhance end ====================
 
         # ==================== 2. 新增 Down_wt (HWD) ====================
         elif m is Down_wt:

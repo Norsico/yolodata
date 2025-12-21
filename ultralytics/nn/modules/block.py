@@ -3504,3 +3504,20 @@ class SGHBSGate(nn.Module):
         return self.fusion(torch.cat([x_sem, d_enh], dim=1))
 
 
+class HFEnhance(nn.Module):
+    """High-Frequency Residual Refinement (HFRR)"""
+    def __init__(self, c, k=3):
+        super().__init__()
+        self.lp = nn.AvgPool2d(k, stride=1, padding=k // 2)
+        self.dw = nn.Conv2d(c, c, 3, 1, 1, groups=c, bias=False)
+        self.pw = nn.Conv2d(c, c, 1, 1, 0, bias=False)
+        self.bn = nn.BatchNorm2d(c)
+        self.act = nn.SiLU()
+        # alpha=0 -> 初始等价恒等映射，训练稳定
+        self.alpha = nn.Parameter(torch.zeros(1, c, 1, 1))
+
+    def forward(self, x):
+        hp = x - self.lp(x)
+        hp = self.act(self.bn(self.pw(self.dw(hp))))
+        return x + self.alpha * hp
+
