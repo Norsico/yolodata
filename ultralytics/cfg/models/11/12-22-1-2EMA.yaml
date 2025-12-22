@@ -6,12 +6,10 @@
 # Detect 输入：P3 用 FrequencyGate 输出(19)，P4/P5 用 EMA 后的特征
 # --------------------------------------------------------
 
-# Parameters
 nc: 6
 scales:
   n: [0.50, 0.25, 1024]
 
-# Backbone (保持不动)
 backbone:
   - [-1, 1, Conv, [64, 3, 2]]                  # 0
   - [-1, 1, Conv, [128, 3, 2]]                 # 1-P2/4
@@ -25,7 +23,6 @@ backbone:
   - [-1, 1, SPPF, [1024, 5]]                   # 9
   - [-1, 2, C2PSA, [1024]]                     # 10
 
-# Head
 head:
   # === DySample 上采样 ===
   - [-1, 1, DySample, [2, 'lp']]               # 11
@@ -36,12 +33,12 @@ head:
   - [[-1, 4], 1, Concat, [1]]                  # 15
   - [-1, 2, C3k2, [256, False]]                # 16 (P3 语义流)
 
-  # === Detail Branch（保持你现有策略：RFAConv + Conv 下采样）===
-  - [2, 1, RFAConv, [128]]                     # 17 (源头用 Layer2)
-  - [-1, 1, Conv, [128, 3, 2]]                 # 18 (Conv 下采样)
+  # === Detail Branch（12-13-2：源头 Layer1）===
+  - [1, 1, RFAConv, [128]]                     # 17  ✅ 修正：from=1
+  - [-1, 1, Conv, [128, 3, 2]]                 # 18
 
   # === Gate 融合（得到最终 P3）===
-  - [[16, 18], 1, FrequencyGate, [128, 256]]   # 19 (Fused P3)  ← 这里就是 Detect 的 P3 输入
+  - [[16, 18], 1, FrequencyGate, [128, 256]]   # 19 (Fused P3)
 
   # === 输出路径 ===
   - [19, 1, Conv, [256, 3, 2]]                 # 20
@@ -53,8 +50,7 @@ head:
   - [-1, 2, C3k2, [1024, True]]                # 25 (P5)
 
   # === EMA 只作用在 P4/P5（P3 不加任何注意力）===
-  - [22, 1, EMA, []]                           # 26 (Enhance P4)
-  - [25, 1, EMA, []]                           # 27 (Enhance P5)
+  - [22, 1, EMA, []]                           # 26
+  - [25, 1, EMA, []]                           # 27
 
-  # Detect：P3 用 19，P4/P5 用 EMA 后 26/27
   - [[19, 26, 27], 1, Detect, [nc]]
