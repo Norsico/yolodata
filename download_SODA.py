@@ -6,7 +6,7 @@ import time
 
 # === 1. 设置下载链接 ===
 ORIGINAL_URLS = [
-'https://github.com/Norsico/yolodata/releases/download/0.2.0/SODA10M_82_6k.zip'
+    'https://github.com/Norsico/yolodata/releases/download/0.2.0/SODA10M_82_6k.zip'
 ]
 
 # === 2. 策略调整：优先用原始链接（求稳），其次才是镜像 ===
@@ -17,8 +17,11 @@ MIRRORS = [
 ]
 
 # === 3. 路径配置 ===
-MERGED_ZIP_FILE = "/workspace/SODA10M_82_6k.zip"
-DATASET_DIR = "/workspace/datasets/SODA10M_82_6k" 
+MERGED_ZIP_FILE = "/workspace/SODA10M_82_10k.zip"
+DATASET_DIR = "/workspace/datasets/SODA10M_82_10k" 
+
+# === 4. 是否启用分卷合并 ===
+USE_SPLIT_FILES = False  # 设置为 False 表示不进行分卷合并
 
 def install_aria2():
     if shutil.which("aria2c") is None:
@@ -106,16 +109,22 @@ if __name__ == "__main__":
                 # 这一步会卡住直到下载完成
                 smart_download(url, part_name)
             
-            # 合并
-            merge_files(part_files, MERGED_ZIP_FILE)
+            if USE_SPLIT_FILES and len(ORIGINAL_URLS) > 1:
+                # 合并分卷文件
+                merge_files(part_files, MERGED_ZIP_FILE)
+                
+                # 清理临时分片
+                for part in part_files:
+                    if os.path.exists(part): os.remove(part)
+                    if os.path.exists(part+".aria2"): os.remove(part+".aria2")
             
-            # 清理临时分片
-            for part in part_files:
-                if os.path.exists(part): os.remove(part)
-                if os.path.exists(part+".aria2"): os.remove(part+".aria2")
-        
+            # 如果只有一个文件，不需要合并分卷
+            elif len(ORIGINAL_URLS) == 1:
+                print(f"⚠️ 只有一个文件，跳过合并分卷。")
+                shutil.move(part_files[0], MERGED_ZIP_FILE)
+            
         # 解压
-        print(f"📦 正在解压...")
+        print(f"📦 正在解压...") 
         os.makedirs(DATASET_DIR, exist_ok=True)
         try:
             with zipfile.ZipFile(MERGED_ZIP_FILE, 'r') as z:
