@@ -6,8 +6,7 @@ import time
 
 # === 1. 设置下载链接 ===
 ORIGINAL_URLS = [
-    "https://github.com/Norsico/yolodata/releases/download/0.1.0/SODA10M_82_10k.zip.001",
-    "https://github.com/Norsico/yolodata/releases/download/0.1.0/SODA10M_82_10k.zip.002"
+'https://github.com/Norsico/yolodata/releases/download/0.2.0/SODA10M_82_6k.zip'
 ]
 
 # === 2. 策略调整：优先用原始链接（求稳），其次才是镜像 ===
@@ -18,8 +17,8 @@ MIRRORS = [
 ]
 
 # === 3. 路径配置 ===
-MERGED_ZIP_FILE = "/workspace/SODA10M_82_10k.zip"
-DATASET_DIR = "/workspace/datasets/SODA10M_82_10k" 
+MERGED_ZIP_FILE = "/workspace/SODA10M_82_6k.zip"
+DATASET_DIR = "/workspace/datasets/SODA10M_82_6k" 
 
 def install_aria2():
     if shutil.which("aria2c") is None:
