@@ -96,6 +96,7 @@ from ultralytics.nn.modules import (
     SepFrequencyGate,
     SGHBSGate,
     HFEnhance,
+    RWCFuseLite,
 )
     
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
@@ -1707,6 +1708,28 @@ def parse_model(d, ch, verbose=True):
             
             # Semantic_Inject 的输出通道数等于 c_high (它把语义注入到了高分流中)
             c2 = c_high
+
+        elif m is RWCFuseLite:
+            c_sem = ch[f[0]]
+            c_detail = ch[f[1]]
+
+            # YAML: [] -> r=16, groups=1
+            # YAML: [r] -> groups=1
+            # YAML: [r, groups]
+            if len(args) == 0:
+                r, groups = 16, 1
+            elif len(args) == 1:
+                r, groups = int(args[0]), 1
+            else:
+                r, groups = int(args[0]), int(args[1])
+
+            c_out = c_sem  # ✅ 永远对齐缩放后的语义通道，残差稳定
+            groups = max(1, min(groups, c_out))
+
+            args = [c_sem, c_detail, c_out, r, groups]
+            c2 = c_out
+
+
         # ================== 兼容解析逻辑 ==================
         # 🚀 修改点：把 SepFrequencyGate 加到这里面
         elif m in {FrequencyGate, LSK_FrequencyGate, SDC_Gate, LiteFrequencyGate, SepFrequencyGate, SGHBSGate}:

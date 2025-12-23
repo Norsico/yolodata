@@ -3521,3 +3521,55 @@ class HFEnhance(nn.Module):
         hp = self.act(self.bn(self.pw(self.dw(hp))))
         return x + self.alpha * hp
 
+
+class RWCFuseLite(nn.Module):
+    """
+    Residual Weighted Channel Fusion (Lite)
+    - x_sem: [B, 256, H, W]
+    - x_detail: [B, 128, H, W]
+    输出: [B, 256, H, W]
+    """
+    def __init__(self, c_sem=256, c_detail=128, c_out=256, r=16, proj_groups=1, eps=1e-4):
+        super().__init__()
+        assert c_out == c_sem, "为了残差稳定，建议 c_out == c_sem（默认 256）"
+        self.eps = eps
+
+        # 细节分支投影到 256（最主要的开销就在这，但仍然很可控）
+        self.detail_proj = nn.Sequential(
+            nn.Conv2d(c_detail, c_out, kernel_size=1, stride=1, padding=0,
+                      groups=proj_groups, bias=False),
+            nn.BatchNorm2d(c_out),
+            nn.SiLU()
+        )
+
+        # 仅 2 个参数：学习两路融合权重（relu 保证非负，再归一化）
+        self.w = nn.Parameter(torch.ones(2))
+
+        # SE-lite：只做通道校准（无空间mask），非常轻
+        c_mid = max(c_out // r, 8)
+        self.se = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(c_out, c_mid, 1, bias=True),
+            nn.SiLU(),
+            nn.Conv2d(c_mid, c_out, 1, bias=True),
+            nn.Sigmoid()
+        )
+
+        # 可选：给 SE 一个缩放（防止初期过强）
+        self.alpha = nn.Parameter(torch.tensor(1.0))
+
+    def forward(self, x):
+        x_sem, x_detail = x
+        d = self.detail_proj(x_detail)
+
+        w = torch.relu(self.w)
+        w = w / (w.sum() + self.eps)
+
+        fused = w[0] * x_sem + w[1] * d
+        gate = self.se(fused)
+
+        # 残差保底：永远保留语义流（你数据上通常更稳）
+        out = fused * (1.0 + self.alpha * (gate - 0.5)) + x_sem
+        return out
+
+
