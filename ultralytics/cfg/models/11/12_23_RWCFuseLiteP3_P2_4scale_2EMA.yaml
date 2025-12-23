@@ -1,0 +1,65 @@
+# 12_23_RWCFuseLiteP3_P2_ultralite_4scale_2EMA
+nc: 6
+
+scales:
+  n: [0.50, 0.25, 1024]
+
+backbone:
+  - [-1, 1, Conv, [64, 3, 2]]                  # 0
+  - [-1, 1, Conv, [128, 3, 2]]                 # 1-P2/4
+  - [-1, 2, C3k2, [256, False, 0.25]]          # 2-P2/4
+  - [-1, 1, Conv, [256, 3, 2]]                 # 3-P3/8
+  - [-1, 2, C3k2, [512, False, 0.25]]          # 4-P3/8
+  - [-1, 1, Conv, [512, 3, 2]]                 # 5-P4/16
+  - [-1, 2, C3k2, [512, True]]                 # 6-P4/16
+  - [-1, 1, Conv, [1024, 3, 2]]                # 7-P5/32
+  - [-1, 2, C3k2, [1024, True]]                # 8-P5/32
+  - [-1, 1, SPPF, [1024, 5]]                   # 9
+  - [-1, 2, C2PSA, [1024]]                     # 10
+
+head:
+  # ===== Up path =====
+  - [-1, 1, DySample, [2, 'lp']]               # 11
+  - [[-1, 6], 1, Concat, [1]]                  # 12
+  - [-1, 2, C3k2, [512, False]]                # 13  (P4 head feat)
+
+  - [-1, 1, DySample, [2, 'lp']]               # 14
+  - [[-1, 4], 1, Concat, [1]]                  # 15
+  - [-1, 2, C3k2, [256, False]]                # 16  (P3 semantic feat)
+
+  # ===== Detail branch =====
+  - [1, 1, RFAConv, [128]]                     # 17  from backbone layer 1
+  - [-1, 1, Conv, [128, 3, 2]]                 # 18
+
+  # ===== P3 Fusion =====
+  - [[16, 18], 1, RWCFuseLite, [16, 2]]        # 19
+
+  # lift P3 to 256ch for Detect (same as your best)
+  - [19, 1, Conv, [1024, 1, 1]]                # 20  (P3_out_for_Detect) -> 256ch under n
+
+  # ============================================================
+  # ===== NEW: P2 ultralite head (NO C3k2, NO extra 3x3) =====
+  # P3_out (stride 8) -> upsample to stride 4
+  - [20, 1, DySample, [2, 'lp']]               # 21  (P2_up)
+  # fuse with backbone P2 feature (layer 2)
+  - [[-1, 2], 1, Concat, [1]]                  # 22
+  # compress to small channel for Detect (keep it LIGHT!)
+  # [256,1,1] -> 64ch under n  (比你之前给到 128 更省显存/算力)
+  - [-1, 1, Conv, [256, 1, 1]]                 # 23  (P2_out_for_Detect)
+  # ============================================================
+
+  # ===== Down path (same as your best) =====
+  - [20, 1, Conv, [512, 3, 2]]                 # 24  -> P4 path
+  - [[-1, 13], 1, Concat, [1]]                 # 25
+  - [-1, 2, C3k2, [512, False]]                # 26  (P4_out)
+
+  - [-1, 1, Conv, [1024, 3, 2]]                # 27  -> P5 path
+  - [[-1, 10], 1, Concat, [1]]                 # 28
+  - [-1, 2, C3k2, [1024, True]]                # 29  (P5_out)
+
+  # ===== EMA only on P4/P5 =====
+  - [26, 1, EMA, []]                           # 30
+  - [29, 1, EMA, []]                           # 31
+
+  # ===== Detect: 4 scales (P2, P3, P4, P5) =====
+  - [[23, 20, 30, 31], 1, Detect, [nc]]        # 32
