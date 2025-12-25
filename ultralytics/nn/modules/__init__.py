@@ -88,6 +88,7 @@ from .block import (
     HFEnhance,
     RWCFuseLite,
     SimAM,
+    HFPLite,
 )
 from .conv import (
     CBAM,
@@ -118,6 +119,7 @@ from .head import (
     YOLOEDetect,
     YOLOESegment,
     v10Detect,
+    DetectLitePDW,
 )
 from .transformer import (
     AIFI,
@@ -239,4 +241,7 @@ __all__ = (
     "HFEnhance",
     "RWCFuseLite",
     "SimAM",
+    "HFPLite",
+    "DetectLitePDW",
+    
 )

@@ -3586,3 +3586,40 @@ class SimAM(nn.Module):
         e = (x_centered ** 2) / (4 * (var + self.e_lambda)) + 0.5
         return x * self.sigmoid(e)
 
+
+
+class HFPLite(nn.Module):
+    """High-Frequency Perception (Lite): fixed high-pass + channel/spatial masks."""
+    def __init__(self, channels, alpha=1.0, eps=1e-6):
+        super().__init__()
+        self.alpha = alpha
+        self.eps = eps
+
+        # fixed Laplacian high-pass (depthwise)
+        k = torch.tensor([[0, -1, 0],
+                          [-1, 4, -1],
+                          [0, -1, 0]], dtype=torch.float32)
+        self.register_buffer("hp", k.view(1, 1, 3, 3).repeat(channels, 1, 1, 1))
+
+        # channel mask (ECA-like, super light)
+        self.c1 = nn.Conv2d(channels, channels, 1, bias=True)
+        # spatial mask
+        self.s1 = nn.Conv2d(channels, 1, 1, bias=True)
+
+    def forward(self, x):
+        # high-frequency response
+        hf = F.conv2d(x, self.hp, padding=1, groups=x.shape[1]).abs()
+
+        # channel mask
+        ch = hf.mean(dim=(2, 3), keepdim=True)
+        ch = torch.sigmoid(self.c1(ch))
+
+        # spatial mask
+        sp = torch.sigmoid(self.s1(hf))
+
+        # apply both (broadcast)
+        mask = ch * sp
+        return x * (1.0 + self.alpha * (mask - 0.5))
+
+
+

@@ -98,6 +98,8 @@ from ultralytics.nn.modules import (
     HFEnhance,
     RWCFuseLite,
     SimAM,
+    HFPLite,
+    DetectLitePDW,
 )
     
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
@@ -1674,6 +1676,12 @@ def parse_model(d, ch, verbose=True):
             # - [1e-4] -> SimAM(1e-4)
             args = [*args]
 
+        elif m is HFPLite:
+            c1 = ch[f]
+            c2 = c1
+            # YAML是 [] 则 args=[]，这里把 channels 放进去
+            # 让 HFPLite(channels, *args)
+            args = [c1, *args]
 
         elif m is DBB_Lite:
             c1 = ch[f]
@@ -1777,12 +1785,12 @@ def parse_model(d, ch, verbose=True):
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
         elif m in frozenset(
-            {Detect, WorldDetect, YOLOEDetect, Segment, YOLOESegment, Pose, OBB, ImagePoolingAttn, v10Detect}
+            {Detect, DetectLitePDW, WorldDetect, YOLOEDetect, Segment, YOLOESegment, Pose, OBB, ImagePoolingAttn, v10Detect}
         ):
             args.append([ch[x] for x in f])
             if m is Segment or m is YOLOESegment:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
-            if m in {Detect, YOLOEDetect, Segment, YOLOESegment, Pose, OBB}:
+            if m in {Detect, DetectLitePDW, YOLOEDetect, Segment, YOLOESegment, Pose, OBB}:
                 m.legacy = legacy
         elif m is RTDETRDecoder:  # special case, channels arg must be passed in index 1
             args.insert(1, [ch[x] for x in f])

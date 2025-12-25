@@ -1180,3 +1180,39 @@ class v10Detect(Detect):
     def fuse(self):
         """Remove the one2many head for inference optimization."""
         self.cv2 = self.cv3 = nn.ModuleList([nn.Identity()] * self.nl)
+
+
+class DetectLitePDW(Detect):
+    """
+    Drop-in replacement for Detect:
+    make BOTH reg/cls branches depthwise-separable to reduce FLOPs (especially on P2).
+    """
+    def __init__(self, nc=80, ch=()):
+        super().__init__(nc, ch)
+
+        # ---- pick hidden dims (keep conservative) ----
+        # reg hidden
+        c2 = max(16, ch[0] // 4)
+        # cls hidden
+        c3 = max(16, ch[0] // 2)
+
+        # ---- rebuild regression branch (cv2) ----
+        # output: 4*reg_max (same as Detect)
+        self.cv2 = nn.ModuleList(
+            nn.Sequential(
+                DWConv(x, x, 3), Conv(x, c2, 1),
+                DWConv(c2, c2, 3), Conv(c2, c2, 1),
+                nn.Conv2d(c2, 4 * self.reg_max, 1)
+            ) for x in ch
+        )
+
+        # ---- rebuild classification branch (cv3) ----
+        self.cv3 = nn.ModuleList(
+            nn.Sequential(
+                DWConv(x, x, 3), Conv(x, c3, 1),
+                DWConv(c3, c3, 3), Conv(c3, c3, 1),
+                nn.Conv2d(c3, self.nc, 1)
+            ) for x in ch
+        )
+
+
