@@ -3573,3 +3573,16 @@ class RWCFuseLite(nn.Module):
         return out
 
 
+class SimAM(nn.Module):
+    def __init__(self, e_lambda=1e-4):
+        super().__init__()
+        self.e_lambda = e_lambda
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        mu = x.mean(dim=(2, 3), keepdim=True)
+        x_centered = x - mu
+        var = (x_centered ** 2).mean(dim=(2, 3), keepdim=True)
+        e = (x_centered ** 2) / (4 * (var + self.e_lambda)) + 0.5
+        return x * self.sigmoid(e)
+

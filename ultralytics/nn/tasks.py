@@ -97,6 +97,7 @@ from ultralytics.nn.modules import (
     SGHBSGate,
     HFEnhance,
     RWCFuseLite,
+    SimAM,
 )
     
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
@@ -1664,6 +1665,15 @@ def parse_model(d, ch, verbose=True):
             # 如果 YAML 是 [], args 变成 [c1, c2] -> 使用默认 factor=32
             # 如果 YAML 是 [8], args 变成 [c1, c2, 8] -> 使用 factor=8
             args = [c1, c2, *args]
+
+        elif m is SimAM:
+            c1 = ch[f]
+            c2 = c1  # SimAM 不改变通道数
+            # args 来自 YAML:
+            # - [] -> SimAM() 使用默认 e_lambda
+            # - [1e-4] -> SimAM(1e-4)
+            args = [*args]
+
 
         elif m is DBB_Lite:
             c1 = ch[f]

@@ -87,6 +87,7 @@ from .block import (
     SGHBSGate,
     HFEnhance,
     RWCFuseLite,
+    SimAM,
 )
 from .conv import (
     CBAM,
@@ -237,4 +238,5 @@ __all__ = (
     "SGHBSGate",
     "HFEnhance",
     "RWCFuseLite",
+    "SimAM",
 )
