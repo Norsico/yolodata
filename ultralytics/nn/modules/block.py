@@ -3074,15 +3074,26 @@ class Semantic_Inject(nn.Module):
 class EMA(nn.Module):
     def __init__(self, channels, c2=None, factor=32):
         super(EMA, self).__init__()
-        self.groups = factor
+
+        # ---- FIX: make groups a divisor of channels ----
+        factor = int(factor)
+        factor = max(1, min(factor, channels))
+        self.groups = math.gcd(channels, factor)  # <=关键：保证 channels % groups == 0
+        self.groups = max(1, self.groups)
+        # ----------------------------------------------
+
         assert channels // self.groups > 0
+
         self.softmax = nn.Softmax(-1)
         self.agp = nn.AdaptiveAvgPool2d((1, 1))
         self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
         self.pool_w = nn.AdaptiveAvgPool2d((1, None))
-        self.gn = nn.GroupNorm(channels // self.groups, channels // self.groups)
-        self.conv1x1 = nn.Conv2d(channels // self.groups, channels // self.groups, kernel_size=1, stride=1, padding=0)
-        self.conv3x3 = nn.Conv2d(channels // self.groups, channels // self.groups, kernel_size=3, stride=1, padding=1)
+
+        # group_x 的通道数 = channels // groups
+        cpg = channels // self.groups
+        self.gn = nn.GroupNorm(cpg, cpg)
+        self.conv1x1 = nn.Conv2d(cpg, cpg, kernel_size=1, stride=1, padding=0)
+        self.conv3x3 = nn.Conv2d(cpg, cpg, kernel_size=3, stride=1, padding=1)
 
     def forward(self, x):
         b, c, h, w = x.size()
@@ -3621,5 +3632,48 @@ class HFPLite(nn.Module):
         mask = ch * sp
         return x * (1.0 + self.alpha * (mask - 0.5))
 
+
+class DSConv(nn.Module):
+    """Depthwise-Separable Conv: DWConv(kxk) + PWConv(1x1)"""
+    def __init__(self, c1, c2, k=3, s=1):
+        super().__init__()
+        self.dw = DWConv(c1, c1, k, s)   # depthwise
+        self.pw = Conv(c1, c2, 1, 1)     # pointwise
+
+    def forward(self, x):
+        return self.pw(self.dw(x))
+
+
+class DSBottleneck(nn.Module):
+    """Light bottleneck with DSConv"""
+    def __init__(self, c, shortcut=True):
+        super().__init__()
+        self.cv1 = Conv(c, c, 1, 1)
+        self.cv2 = DSConv(c, c, 3, 1)
+        self.add = shortcut
+
+    def forward(self, x):
+        y = self.cv2(self.cv1(x))
+        return x + y if self.add else y
+
+
+class DSC3k2(nn.Module):
+    """
+    Drop-in replacement for C3k2 (signature-compatible):
+    (c1, c2, n=1, shortcut=False, e=0.5, c3k=False)
+    - uses DS bottlenecks inside CSP-style block
+    """
+    def __init__(self, c1, c2, n=1, shortcut=False, e=0.5, c3k=False):
+        super().__init__()
+        c_ = int(c2 * e)  # hidden channels
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c1, c_, 1, 1)
+        self.m = nn.Sequential(*[DSBottleneck(c_, shortcut=shortcut) for _ in range(n)])
+        self.cv3 = Conv(2 * c_, c2, 1, 1)
+
+    def forward(self, x):
+        y1 = self.m(self.cv1(x))
+        y2 = self.cv2(x)
+        return self.cv3(torch.cat((y1, y2), dim=1))
 
 

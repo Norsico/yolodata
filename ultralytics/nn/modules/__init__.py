@@ -89,6 +89,7 @@ from .block import (
     RWCFuseLite,
     SimAM,
     HFPLite,
+    DSC3k2,
 )
 from .conv import (
     CBAM,
@@ -245,5 +246,6 @@ __all__ = (
     "HFPLite",
     "DetectLitePDW",
     "DetectHybridP2G",
-    
+    "DSC3k2",
+
 )
