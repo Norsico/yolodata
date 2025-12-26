@@ -1,0 +1,60 @@
+# 12_26_RWCFuseLiteP3_P2_4scale_2EMA_DetectLitePDW_HFPLiteP2only
+nc: 6
+
+scales:
+  n: [0.50, 0.25, 1024]
+
+backbone:
+  - [-1, 1, Conv, [64, 3, 2]]                  # 0
+  - [-1, 1, Conv, [128, 3, 2]]                 # 1-P2/4
+  - [-1, 2, C3k2, [256, False, 0.25]]          # 2
+  - [-1, 1, Conv, [256, 3, 2]]                 # 3-P3/8
+  - [-1, 2, C3k2, [512, False, 0.25]]          # 4
+  - [-1, 1, Conv, [512, 3, 2]]                 # 5-P4/16
+  - [-1, 2, C3k2, [512, True]]                 # 6
+  - [-1, 1, Conv, [1024, 3, 2]]                # 7-P5/32
+  - [-1, 2, C3k2, [1024, True]]                # 8
+  - [-1, 1, SPPF, [1024, 5]]                   # 9
+  - [-1, 2, C2PSA, [1024]]                     # 10
+
+head:
+  # ===== Up path =====
+  - [-1, 1, DySample, [2, 'lp']]               # 11
+  - [[-1, 6], 1, Concat, [1]]                  # 12
+  - [-1, 2, C3k2, [512, False]]                # 13
+
+  - [-1, 1, DySample, [2, 'lp']]               # 14
+  - [[-1, 4], 1, Concat, [1]]                  # 15
+  - [-1, 2, C3k2, [256, False]]                # 16
+
+  # ===== Detail branch =====
+  - [1, 1, RFAConv, [128]]                     # 17
+  - [-1, 1, Conv, [128, 3, 2]]                 # 18
+
+  # ===== P3 fusion =====
+  - [[16, 18], 1, RWCFuseLite, [16, 2]]        # 19
+  - [19, 1, Conv, [1024, 1, 1]]                # 20  P3_out_for_Detect (256ch under n)
+
+  # ===== P2 head feature =====
+  - [20, 1, DySample, [2, 'lp']]               # 21
+  - [[-1, 2], 1, Concat, [1]]                  # 22
+  - [-1, 1, Conv, [256, 1, 1]]                 # 23  P2_out_for_Detect (64ch under n)
+
+  # ===== NEW: HFPLite only on P2 =====
+  - [23, 1, HFPLite, []]                       # 24  P2_hfp
+
+  # ===== Down path (unchanged, uses raw P3_out=20) =====
+  - [20, 1, Conv, [512, 3, 2]]                 # 25
+  - [[-1, 13], 1, Concat, [1]]                 # 26
+  - [-1, 2, C3k2, [512, False]]                # 27  P4_out
+
+  - [-1, 1, Conv, [1024, 3, 2]]                # 28
+  - [[-1, 10], 1, Concat, [1]]                 # 29
+  - [-1, 2, C3k2, [1024, True]]                # 30  P5_out
+
+  # ===== EMA =====
+  - [27, 1, EMA, []]                           # 31
+  - [30, 1, EMA, []]                           # 32
+
+  # ===== Detect (FIXED INDICES) =====
+  - [[24, 20, 31, 32], 1, DetectLitePDW, [nc]] # 33

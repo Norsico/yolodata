@@ -120,6 +120,7 @@ from .head import (
     YOLOESegment,
     v10Detect,
     DetectLitePDW,
+    DetectHybridP2G,
 )
 from .transformer import (
     AIFI,
@@ -243,5 +244,6 @@ __all__ = (
     "SimAM",
     "HFPLite",
     "DetectLitePDW",
+    "DetectHybridP2G",
     
 )

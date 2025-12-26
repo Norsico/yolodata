@@ -1216,3 +1216,70 @@ class DetectLitePDW(Detect):
         )
 
 
+class GConv(nn.Module):
+    """Group Conv + BN + SiLU (light but stronger than pure DW)"""
+    def __init__(self, c1, c2, k=3, s=1, g=4, act=True):
+        super().__init__()
+        p = k // 2
+
+        # make g valid: must divide both c1 and c2
+        gg = min(g, c1, c2)
+        while gg > 1 and (c1 % gg != 0 or c2 % gg != 0):
+            gg //= 2
+        gg = max(1, gg)
+
+        self.conv = nn.Conv2d(c1, c2, k, s, p, groups=gg, bias=False)
+        self.bn = nn.BatchNorm2d(c2)
+        self.act = nn.SiLU() if act else nn.Identity()
+
+    def forward(self, x):
+        return self.act(self.bn(self.conv(x)))
+
+
+class DetectHybridP2G(Detect):
+    """
+    Hybrid head:
+    - P2 regression branch uses GroupConv (stronger) to recover tiny/elongated localization
+    - P3/P4/P5 keep PDW-lite style (cheap)
+    """
+    def __init__(self, nc=80, ch=(), p2_groups=4):
+        super().__init__(nc, ch)
+
+        # hidden dims (keep close to ultralytics detect heuristics)
+        c2 = max((16, ch[0] // 4, self.reg_max * 4))   # reg hidden
+        c3 = max((16, ch[0]))                          # cls hidden
+
+        # -------- Regression heads (cv2) --------
+        cv2 = []
+        for i, x in enumerate(ch):
+            if i == 0:
+                # P2: stronger but still light
+                cv2.append(nn.Sequential(
+                    GConv(x, c2, k=3, s=1, g=p2_groups),   # key change
+                    DWConv(c2, c2, 3),
+                    Conv(c2, c2, 1),
+                    nn.Conv2d(c2, 4 * self.reg_max, 1)
+                ))
+            else:
+                # other scales: keep lite PDW
+                cv2.append(nn.Sequential(
+                    DWConv(x, x, 3),
+                    Conv(x, c2, 1),
+                    DWConv(c2, c2, 3),
+                    Conv(c2, c2, 1),
+                    nn.Conv2d(c2, 4 * self.reg_max, 1)
+                ))
+        self.cv2 = nn.ModuleList(cv2)
+
+        # -------- Classification heads (cv3) --------
+        # keep cheap everywhere (you也可以后续只对P2 cls做一点增强，但先别叠加变量)
+        self.cv3 = nn.ModuleList(
+            nn.Sequential(
+                DWConv(x, x, 3),
+                Conv(x, c3, 1),
+                DWConv(c3, c3, 3),
+                Conv(c3, c3, 1),
+                nn.Conv2d(c3, self.nc, 1)
+            ) for x in ch
+        )
+
