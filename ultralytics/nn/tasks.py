@@ -102,6 +102,7 @@ from ultralytics.nn.modules import (
     DetectLitePDW,
     DetectHybridP2G,
     DSC3k2,
+    GCR,
 )
     
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
@@ -1663,6 +1664,13 @@ def parse_model(d, ch, verbose=True):
                     args.extend((True, 1.2))
             if m is C2fCIB:
                 legacy = False
+
+        elif m is GCR:
+            c1 = ch[f]
+            c2 = c1
+            # YAML args: [expand] 或 []
+            args = [c1, *args]  # -> GCR(c, expand)
+
 
         elif m is EMA:
             c1 = ch[f]

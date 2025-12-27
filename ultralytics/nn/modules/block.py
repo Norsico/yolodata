@@ -3677,3 +3677,22 @@ class DSC3k2(nn.Module):
         return self.cv3(torch.cat((y1, y2), dim=1))
 
 
+class GCR(nn.Module):
+    """
+    Global Channel Refinement (ParamAlign)
+    - 几乎不增加GFLOPs：全在 1x1 上做
+    - 通过 expand 控制新增参数量
+    """
+    def __init__(self, c, expand=6):
+        super().__init__()
+        hidden = int(c * expand)
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.fc1 = nn.Conv2d(c, hidden, 1, bias=True)
+        self.act = nn.SiLU()
+        self.fc2 = nn.Conv2d(hidden, c, 1, bias=True)
+        self.gate = nn.Sigmoid()
+
+    def forward(self, x):
+        w = self.gate(self.fc2(self.act(self.fc1(self.pool(x)))))
+        return x * w
+

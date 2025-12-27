@@ -90,6 +90,7 @@ from .block import (
     SimAM,
     HFPLite,
     DSC3k2,
+    GCR,
 )
 from .conv import (
     CBAM,
@@ -247,5 +248,6 @@ __all__ = (
     "DetectLitePDW",
     "DetectHybridP2G",
     "DSC3k2",
-
+    "GCR",
+    
 )
