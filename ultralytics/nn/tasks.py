@@ -103,6 +103,7 @@ from ultralytics.nn.modules import (
     DetectHybridP2G,
     DSC3k2,
     GCR,
+    ParamAlignMLP,
 )
     
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
@@ -1664,6 +1665,14 @@ def parse_model(d, ch, verbose=True):
                     args.extend((True, 1.2))
             if m is C2fCIB:
                 legacy = False
+
+
+        elif m is ParamAlignMLP:
+            c1 = ch[f]
+            c2 = c1
+            # YAML args: [] 或 [hidden] 或 [hidden, alpha_init]
+            args = [c1, *args]
+
 
         elif m is GCR:
             c1 = ch[f]

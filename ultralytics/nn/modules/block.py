@@ -3696,3 +3696,24 @@ class GCR(nn.Module):
         w = self.gate(self.fc2(self.act(self.fc1(self.pool(x)))))
         return x * w
 
+
+class ParamAlignMLP(nn.Module):
+    """
+    Param injector with (almost) zero extra FLOPs:
+    - use GAP -> 1x1 feature
+    - MLP on 1x1 only
+    - ADD residual with learnable alpha (init 0.0) => starts as identity, less likely to hurt mAP
+    """
+    def __init__(self, c, hidden=None, alpha_init=0.0):
+        super().__init__()
+        hidden = int(hidden) if hidden is not None else int(c * 3)  # default ~3x
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.fc1 = nn.Conv2d(c, hidden, 1, bias=True)
+        self.act = nn.SiLU()
+        self.fc2 = nn.Conv2d(hidden, c, 1, bias=True)
+        self.alpha = nn.Parameter(torch.tensor(alpha_init))
+
+    def forward(self, x):
+        b = self.fc2(self.act(self.fc1(self.pool(x))))  # [B,c,1,1]
+        return x + self.alpha * b                        # add (broadcast)
+        

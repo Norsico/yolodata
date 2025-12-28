@@ -91,6 +91,7 @@ from .block import (
     HFPLite,
     DSC3k2,
     GCR,
+    ParamAlignMLP,
 )
 from .conv import (
     CBAM,
@@ -249,5 +250,5 @@ __all__ = (
     "DetectHybridP2G",
     "DSC3k2",
     "GCR",
-    
+    "ParamAlignMLP"
 )
