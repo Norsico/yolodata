@@ -1,0 +1,59 @@
+nc: 6
+
+scales:
+  n: [0.50, 0.22, 1024]
+
+backbone:
+  - [-1, 1, Conv,   [64, 3, 2]]                 # 0
+  - [-1, 1, Conv,   [128, 3, 2]]                # 1-P2/4
+  - [-1, 2, DSC3k2, [256, False, 0.25]]         # 2
+  - [-1, 1, Conv,   [256, 3, 2]]                # 3-P3/8
+  - [-1, 2, DSC3k2, [512, False, 0.25]]         # 4
+  - [-1, 1, Conv,   [512, 3, 2]]                # 5-P4/16
+  - [-1, 2, DSC3k2, [512, True]]                # 6
+  - [-1, 1, Conv,   [1024, 3, 2]]               # 7-P5/32
+  - [-1, 2, DSC3k2, [1024, True]]               # 8
+  - [-1, 1, SPPF,   [1024, 5]]                  # 9
+  - [-1, 2, C2PSA,  [1024]]                     # 10
+
+head:
+  # ===== Up path =====
+  - [-1, 1, DySample, [2, 'lp']]                # 11
+  - [[-1, 6], 1, Concat, [1]]                   # 12
+  - [-1, 2, DSC3k2, [512, False]]               # 13 (P4 head feat)
+
+  - [-1, 1, DySample, [2, 'lp']]                # 14
+  - [[-1, 4], 1, Concat, [1]]                   # 15
+  - [-1, 2, DSC3k2, [256, False]]               # 16 (P3 semantic, stride 8)
+
+  # ===== Detail branch (CLEAN): only ONE downsample conv =====
+  # layer1 is P2/4, downsample to P3/8
+  - [1, 1, Conv, [128, 3, 2]]                   # 17 (P3 detail, stride 8)
+
+  # ===== P3 fusion (NO RWCFuseLite) =====
+  - [[16, 17], 1, Concat, [1]]                  # 18
+  - [-1, 1, DSC3k2, [1024, False, 0.25]]        # 19 (P3_out)
+
+  # ===== P2 head feature =====
+  - [19, 1, DySample, [2, 'lp']]                # 20
+  - [[-1, 2], 1, Concat, [1]]                   # 21
+  - [-1, 1, Conv, [256, 1, 1]]                  # 22 (P2_out)
+
+  # ===== HFPLite only on P2 =====
+  - [22, 1, HFPLite, [0.0, 4960]]              # 23  alpha_init=0.0, mlp_hidden=4960
+
+  # ===== Down path =====
+  - [19, 1, Conv, [512, 3, 2]]                  # 24
+  - [[-1, 13], 1, Concat, [1]]                  # 25
+  - [-1, 2, DSC3k2, [512, False]]               # 26 
+
+  - [-1, 1, Conv, [1024, 3, 2]]                 # 27
+  - [[-1, 10], 1, Concat, [1]]                  # 28
+  - [-1, 2, DSC3k2, [1024, True]]               # 29 
+
+  # ===== EMA =====
+  - [26, 1, EMA, []]                            # 30 (P4_out)
+  - [29, 1, EMA, []]                            # 31 (P5_out)
+
+  # ===== Detect =====
+  - [[23, 19, 30, 31], 1, DetectLitePDW, [nc]]  # 32  (P2, P3, P4, P5)

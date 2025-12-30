@@ -1699,10 +1699,11 @@ def parse_model(d, ch, verbose=True):
 
         elif m is HFPLite:
             c1 = ch[f]
-            c2 = c1
-            # YAML是 [] 则 args=[]，这里把 channels 放进去
-            # 让 HFPLite(channels, *args)
+            # YAML: [] -> [c1]
+            # YAML: [0.0] -> [c1, 0.0]
+            # YAML: [0.0, 4960] -> [c1, 0.0, 4960]
             args = [c1, *args]
+
 
         elif m is DBB_Lite:
             c1 = ch[f]

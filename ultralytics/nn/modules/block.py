@@ -3598,13 +3598,14 @@ class SimAM(nn.Module):
         return x * self.sigmoid(e)
 
 
-
 class HFPLite(nn.Module):
-    """High-Frequency Perception (Lite): fixed high-pass + channel/spatial masks."""
-    def __init__(self, channels, alpha=1.0, eps=1e-6):
+    """High-Frequency Perception (Lite++): fixed high-pass + stronger channel MLP + spatial mask."""
+    def __init__(self, channels, alpha=0.0, mlp_hidden=None, eps=1e-6):
         super().__init__()
-        self.alpha = alpha
         self.eps = eps
+
+        # learnable alpha, init 0 => start as identity (very stable)
+        self.alpha = nn.Parameter(torch.tensor(float(alpha)))
 
         # fixed Laplacian high-pass (depthwise)
         k = torch.tensor([[0, -1, 0],
@@ -3612,23 +3613,30 @@ class HFPLite(nn.Module):
                           [0, -1, 0]], dtype=torch.float32)
         self.register_buffer("hp", k.view(1, 1, 3, 3).repeat(channels, 1, 1, 1))
 
-        # channel mask (ECA-like, super light)
-        self.c1 = nn.Conv2d(channels, channels, 1, bias=True)
-        # spatial mask
+        # channel MLP on 1x1 pooled feature (adds params, almost no FLOPs)
+        if mlp_hidden is None:
+            mlp_hidden = channels  # fallback = original behavior
+
+        self.c_mlp = nn.Sequential(
+            nn.Conv2d(channels, mlp_hidden, 1, bias=True),
+            nn.SiLU(),
+            nn.Conv2d(mlp_hidden, channels, 1, bias=True),
+            nn.Sigmoid()
+        )
+
+        # spatial mask (keep as-is to avoid FLOPs increase)
         self.s1 = nn.Conv2d(channels, 1, 1, bias=True)
 
     def forward(self, x):
-        # high-frequency response
         hf = F.conv2d(x, self.hp, padding=1, groups=x.shape[1]).abs()
 
-        # channel mask
-        ch = hf.mean(dim=(2, 3), keepdim=True)
-        ch = torch.sigmoid(self.c1(ch))
+        # channel mask: global pooling -> 1x1 MLP
+        ch = hf.mean(dim=(2, 3), keepdim=True)         # [B,C,1,1]
+        ch = self.c_mlp(ch)                             # [B,C,1,1]
 
-        # spatial mask
-        sp = torch.sigmoid(self.s1(hf))
+        # spatial mask: 1x1 conv on full map (unchanged)
+        sp = torch.sigmoid(self.s1(hf))                 # [B,1,H,W]
 
-        # apply both (broadcast)
         mask = ch * sp
         return x * (1.0 + self.alpha * (mask - 0.5))
 
@@ -3717,3 +3725,19 @@ class ParamAlignMLP(nn.Module):
         b = self.fc2(self.act(self.fc1(self.pool(x))))  # [B,c,1,1]
         return x + self.alpha * b                        # add (broadcast)
         
+
+class GCC(nn.Module):
+    """Global Context Calibration: adds many params with near-zero FLOPs."""
+    def __init__(self, c, hidden, alpha_init=0.0):
+        super().__init__()
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.fc1 = nn.Conv2d(c, hidden, 1, bias=True)
+        self.act = nn.SiLU()
+        self.fc2 = nn.Conv2d(hidden, c, 1, bias=True)
+        self.alpha = nn.Parameter(torch.tensor(alpha_init))
+
+    def forward(self, x):
+        s = self.fc2(self.act(self.fc1(self.pool(x))))
+        # residual-style, starts as identity if alpha=0
+        return x * (1.0 + self.alpha * torch.tanh(s))
+
