@@ -107,88 +107,13 @@ class DFLoss(nn.Module):
         ).mean(-1, keepdim=True)
 
 
-# class BboxLoss(nn.Module):
-#     """Criterion class for computing training losses for bounding boxes."""
-
-#     def __init__(self, reg_max: int = 16):
-#         """Initialize the BboxLoss module with regularization maximum and DFL settings."""
-#         super().__init__()
-#         self.dfl_loss = DFLoss(reg_max) if reg_max > 1 else None
-
-#     def forward(
-#         self,
-#         pred_dist: torch.Tensor,
-#         pred_bboxes: torch.Tensor,
-#         anchor_points: torch.Tensor,
-#         target_bboxes: torch.Tensor,
-#         target_scores: torch.Tensor,
-#         target_scores_sum: torch.Tensor,
-#         fg_mask: torch.Tensor,
-#     ) -> tuple[torch.Tensor, torch.Tensor]:
-#         """Compute IoU and DFL losses for bounding boxes."""
-#         weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
-
-#         # iou = bbox_focal_shape_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, scale=0.5, gamma=0.5, alpha=1.5)
-
-#         # loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
-
-#         # # --- 测试 ---
-#         # raise RuntimeError("DEBUG: Code reached the new IOU loss calculation! Value: " + str(loss_iou.item()))
-#         # ------------------
-#         iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
-#         loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
-
-#         # DFL loss
-#         if self.dfl_loss:
-#             target_ltrb = bbox2dist(anchor_points, target_bboxes, self.dfl_loss.reg_max - 1)
-#             loss_dfl = self.dfl_loss(pred_dist[fg_mask].view(-1, self.dfl_loss.reg_max), target_ltrb[fg_mask]) * weight
-#             loss_dfl = loss_dfl.sum() / target_scores_sum
-#         else:
-#             loss_dfl = torch.tensor(0.0).to(pred_dist.device)
-
-#         return loss_iou, loss_dfl
-
-
 class BboxLoss(nn.Module):
     """Criterion class for computing training losses for bounding boxes."""
 
-    def __init__(
-        self,
-        reg_max: int = 16,
-        use_sanwd: bool = False,
-        sanwd_C: float = 32.0,
-        sanwd_tau: float = 32.0,
-        sanwd_gamma: float = 2.0,
-        sanwd_lambda: float = 0.5,
-        debug_print_once: bool = True,
-        debug_raise_once: bool = False,
-    ):
-        """
-        Args:
-            reg_max: DFL reg_max (same as Ultralytics default).
-            use_sanwd: enable Scale-Aware NWD hybrid box loss.
-            sanwd_C: NWD normalization constant C (pixels).
-            sanwd_tau: soft gate threshold for "small objects" (pixels).
-            sanwd_gamma: gate sharpness.
-            sanwd_lambda: weight for NWD term on small objects.
-            debug_print_once: print once to confirm SA-NWD is used.
-            debug_raise_once: raise once to hard-confirm code path (debug).
-        """
+    def __init__(self, reg_max: int = 16):
+        """Initialize the BboxLoss module with regularization maximum and DFL settings."""
         super().__init__()
         self.dfl_loss = DFLoss(reg_max) if reg_max > 1 else None
-
-        # SA-NWD config
-        self.use_sanwd = bool(use_sanwd)
-        self.sanwd_C = float(sanwd_C)
-        self.sanwd_tau = float(sanwd_tau)
-        self.sanwd_gamma = float(sanwd_gamma)
-        self.sanwd_lambda = float(sanwd_lambda)
-
-        # debug flags
-        self.debug_print_once = bool(debug_print_once)
-        self.debug_raise_once = bool(debug_raise_once)
-        self._dbg_printed = False
-        self._dbg_raised = False
 
     def forward(
         self,
@@ -200,70 +125,145 @@ class BboxLoss(nn.Module):
         target_scores_sum: torch.Tensor,
         fg_mask: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Compute IoU (or SA-NWD hybrid) and DFL losses for bounding boxes."""
-        # weight for positives
-        weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)  # [N,1]
+        """Compute IoU and DFL losses for bounding boxes."""
+        weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
 
-        pb = pred_bboxes[fg_mask]      # [N,4] xyxy
-        tb = target_bboxes[fg_mask]    # [N,4] xyxy
+        # iou = bbox_focal_shape_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, scale=0.5, gamma=0.5, alpha=1.5)
 
-        # base IoU similarity (CIoU)
-        iou = bbox_iou(pb, tb, xywh=False, CIoU=True)  # [N]
+        # loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
 
-        if self.use_sanwd:
-            # NWD similarity (you already added this function above)
-            nwd = nwd_similarity_xyxy(pb, tb, C=self.sanwd_C)  # [N]
+        # # --- 测试 ---
+        # raise RuntimeError("DEBUG: Code reached the new IOU loss calculation! Value: " + str(loss_iou.item()))
+        # ------------------
+        iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
+        loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
 
-            # scale-aware soft gate computed from GT size
-            tx1, ty1, tx2, ty2 = tb.unbind(-1)
-            tw = (tx2 - tx1).clamp(min=1e-7)
-            th = (ty2 - ty1).clamp(min=1e-7)
-            size = torch.sqrt(tw * th + 1e-7)  # [N], pixel scale
-
-            tau = self.sanwd_tau
-            gamma = self.sanwd_gamma
-            w_small = (tau / (size + tau)).pow(gamma)  # [N], small->~1, large->~0
-
-            # hybrid loss
-            L_iou = 1.0 - iou
-            L_nwd = 1.0 - nwd
-            L_box = (1.0 - w_small) * L_iou + (self.sanwd_lambda * w_small) * L_nwd  # [N]
-
-            loss_iou = (L_box.unsqueeze(-1) * weight).sum() / target_scores_sum
-
-            # debug: print/raise once to confirm it's active
-            if self.debug_print_once and (not self._dbg_printed):
-                self._dbg_printed = True
-                with torch.no_grad():
-                    ws_mean = float(w_small.mean().detach().cpu())
-                    li_mean = float(L_iou.mean().detach().cpu())
-                    ln_mean = float(L_nwd.mean().detach().cpu())
-                print(
-                    f"[SA-NWD] ON | C={self.sanwd_C} tau={self.sanwd_tau} gamma={self.sanwd_gamma} "
-                    f"lambda={self.sanwd_lambda} | mean(w_small)={ws_mean:.4f} "
-                    f"mean(1-IoU)={li_mean:.4f} mean(1-NWD)={ln_mean:.4f}"
-                )
-
-            if self.debug_raise_once and (not self._dbg_raised):
-                self._dbg_raised = True
-                raise RuntimeError("[SA-NWD] DEBUG_RAISE_ONCE: SA-NWD bbox loss is active.")
-
-        else:
-            # plain CIoU loss
-            loss_iou = ((1.0 - iou).unsqueeze(-1) * weight).sum() / target_scores_sum
-
-        # DFL loss (unchanged)
+        # DFL loss
         if self.dfl_loss:
             target_ltrb = bbox2dist(anchor_points, target_bboxes, self.dfl_loss.reg_max - 1)
-            loss_dfl = self.dfl_loss(
-                pred_dist[fg_mask].view(-1, self.dfl_loss.reg_max),
-                target_ltrb[fg_mask],
-            ) * weight
+            loss_dfl = self.dfl_loss(pred_dist[fg_mask].view(-1, self.dfl_loss.reg_max), target_ltrb[fg_mask]) * weight
             loss_dfl = loss_dfl.sum() / target_scores_sum
         else:
-            loss_dfl = torch.tensor(0.0, device=pred_dist.device)
+            loss_dfl = torch.tensor(0.0).to(pred_dist.device)
 
         return loss_iou, loss_dfl
+
+
+# class BboxLoss(nn.Module):
+#     """Criterion class for computing training losses for bounding boxes."""
+
+#     def __init__(
+#         self,
+#         reg_max: int = 16,
+#         use_sanwd: bool = False,
+#         sanwd_C: float = 32.0,
+#         sanwd_tau: float = 32.0,
+#         sanwd_gamma: float = 2.0,
+#         sanwd_lambda: float = 0.5,
+#         debug_print_once: bool = True,
+#         debug_raise_once: bool = False,
+#     ):
+#         """
+#         Args:
+#             reg_max: DFL reg_max (same as Ultralytics default).
+#             use_sanwd: enable Scale-Aware NWD hybrid box loss.
+#             sanwd_C: NWD normalization constant C (pixels).
+#             sanwd_tau: soft gate threshold for "small objects" (pixels).
+#             sanwd_gamma: gate sharpness.
+#             sanwd_lambda: weight for NWD term on small objects.
+#             debug_print_once: print once to confirm SA-NWD is used.
+#             debug_raise_once: raise once to hard-confirm code path (debug).
+#         """
+#         super().__init__()
+#         self.dfl_loss = DFLoss(reg_max) if reg_max > 1 else None
+
+#         # SA-NWD config
+#         self.use_sanwd = bool(use_sanwd)
+#         self.sanwd_C = float(sanwd_C)
+#         self.sanwd_tau = float(sanwd_tau)
+#         self.sanwd_gamma = float(sanwd_gamma)
+#         self.sanwd_lambda = float(sanwd_lambda)
+
+#         # debug flags
+#         self.debug_print_once = bool(debug_print_once)
+#         self.debug_raise_once = bool(debug_raise_once)
+#         self._dbg_printed = False
+#         self._dbg_raised = False
+
+#     def forward(
+#         self,
+#         pred_dist: torch.Tensor,
+#         pred_bboxes: torch.Tensor,
+#         anchor_points: torch.Tensor,
+#         target_bboxes: torch.Tensor,
+#         target_scores: torch.Tensor,
+#         target_scores_sum: torch.Tensor,
+#         fg_mask: torch.Tensor,
+#     ) -> tuple[torch.Tensor, torch.Tensor]:
+#         """Compute IoU (or SA-NWD hybrid) and DFL losses for bounding boxes."""
+#         # weight for positives
+#         weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)  # [N,1]
+
+#         pb = pred_bboxes[fg_mask]      # [N,4] xyxy
+#         tb = target_bboxes[fg_mask]    # [N,4] xyxy
+
+#         # base IoU similarity (CIoU)
+#         iou = bbox_iou(pb, tb, xywh=False, CIoU=True)  # [N]
+
+#         if self.use_sanwd:
+#             # NWD similarity (you already added this function above)
+#             nwd = nwd_similarity_xyxy(pb, tb, C=self.sanwd_C)  # [N]
+
+#             # scale-aware soft gate computed from GT size
+#             tx1, ty1, tx2, ty2 = tb.unbind(-1)
+#             tw = (tx2 - tx1).clamp(min=1e-7)
+#             th = (ty2 - ty1).clamp(min=1e-7)
+#             size = torch.sqrt(tw * th + 1e-7)  # [N], pixel scale
+
+#             tau = self.sanwd_tau
+#             gamma = self.sanwd_gamma
+#             w_small = (tau / (size + tau)).pow(gamma)  # [N], small->~1, large->~0
+
+#             # hybrid loss
+#             L_iou = 1.0 - iou
+#             L_nwd = 1.0 - nwd
+#             L_box = (1.0 - w_small) * L_iou + (self.sanwd_lambda * w_small) * L_nwd  # [N]
+
+#             loss_iou = (L_box.unsqueeze(-1) * weight).sum() / target_scores_sum
+
+#             # debug: print/raise once to confirm it's active
+#             if self.debug_print_once and (not self._dbg_printed):
+#                 self._dbg_printed = True
+#                 with torch.no_grad():
+#                     ws_mean = float(w_small.mean().detach().cpu())
+#                     li_mean = float(L_iou.mean().detach().cpu())
+#                     ln_mean = float(L_nwd.mean().detach().cpu())
+#                 print(
+#                     f"[SA-NWD] ON | C={self.sanwd_C} tau={self.sanwd_tau} gamma={self.sanwd_gamma} "
+#                     f"lambda={self.sanwd_lambda} | mean(w_small)={ws_mean:.4f} "
+#                     f"mean(1-IoU)={li_mean:.4f} mean(1-NWD)={ln_mean:.4f}"
+#                 )
+
+#             if self.debug_raise_once and (not self._dbg_raised):
+#                 self._dbg_raised = True
+#                 raise RuntimeError("[SA-NWD] DEBUG_RAISE_ONCE: SA-NWD bbox loss is active.")
+
+#         else:
+#             # plain CIoU loss
+#             loss_iou = ((1.0 - iou).unsqueeze(-1) * weight).sum() / target_scores_sum
+
+#         # DFL loss (unchanged)
+#         if self.dfl_loss:
+#             target_ltrb = bbox2dist(anchor_points, target_bboxes, self.dfl_loss.reg_max - 1)
+#             loss_dfl = self.dfl_loss(
+#                 pred_dist[fg_mask].view(-1, self.dfl_loss.reg_max),
+#                 target_ltrb[fg_mask],
+#             ) * weight
+#             loss_dfl = loss_dfl.sum() / target_scores_sum
+#         else:
+#             loss_dfl = torch.tensor(0.0, device=pred_dist.device)
+
+#         return loss_iou, loss_dfl
 
 
 
@@ -415,18 +415,18 @@ class v8DetectionLoss:
 
         self.assigner = TaskAlignedAssigner(topk=tal_topk, num_classes=self.nc, alpha=0.5, beta=6.0)
 
-        # self.bbox_loss = BboxLoss(m.reg_max).to(device)
+        self.bbox_loss = BboxLoss(m.reg_max).to(device)
         
-        self.bbox_loss = BboxLoss(
-            reg_max=m.reg_max,
-            use_sanwd=True,
-            sanwd_C=32.0,
-            sanwd_tau=32.0,
-            sanwd_gamma=2.0,
-            sanwd_lambda=0.5,
-            debug_print_once=True,   # 只打印一次确认启用
-            debug_raise_once=False,  # 首次验证可改 True，确认后改回 False
-        ).to(device)
+        # self.bbox_loss = BboxLoss(
+        #     reg_max=m.reg_max,
+        #     use_sanwd=True,
+        #     sanwd_C=32.0,
+        #     sanwd_tau=32.0,
+        #     sanwd_gamma=2.0,
+        #     sanwd_lambda=0.5,
+        #     debug_print_once=True,   # 只打印一次确认启用
+        #     debug_raise_once=False,  # 首次验证可改 True，确认后改回 False
+        # ).to(device)
 
         self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device)
 
@@ -1067,34 +1067,34 @@ class TVPSegmentLoss(TVPDetectLoss):
         return cls_loss, vp_loss[1]
 
 
-def nwd_similarity_xyxy(pred_xyxy: torch.Tensor,
-                       target_xyxy: torch.Tensor,
-                       C: float = 32.0,
-                       eps: float = 1e-7) -> torch.Tensor:
-    """
-    Normalized Wasserstein Distance (NWD) similarity for axis-aligned bboxes.
-    pred_xyxy/target_xyxy: [N,4] in (x1,y1,x2,y2), pixel coordinates.
-    return: [N] similarity in (0,1].
-    Reference idea: model bbox as 2D Gaussian and use exp(-W/C). :contentReference[oaicite:4]{index=4}
-    """
-    px1, py1, px2, py2 = pred_xyxy.unbind(-1)
-    tx1, ty1, tx2, ty2 = target_xyxy.unbind(-1)
+# def nwd_similarity_xyxy(pred_xyxy: torch.Tensor,
+#                        target_xyxy: torch.Tensor,
+#                        C: float = 32.0,
+#                        eps: float = 1e-7) -> torch.Tensor:
+#     """
+#     Normalized Wasserstein Distance (NWD) similarity for axis-aligned bboxes.
+#     pred_xyxy/target_xyxy: [N,4] in (x1,y1,x2,y2), pixel coordinates.
+#     return: [N] similarity in (0,1].
+#     Reference idea: model bbox as 2D Gaussian and use exp(-W/C). :contentReference[oaicite:4]{index=4}
+#     """
+#     px1, py1, px2, py2 = pred_xyxy.unbind(-1)
+#     tx1, ty1, tx2, ty2 = target_xyxy.unbind(-1)
 
-    pcx = (px1 + px2) * 0.5
-    pcy = (py1 + py2) * 0.5
-    tcx = (tx1 + tx2) * 0.5
-    tcy = (ty1 + ty2) * 0.5
+#     pcx = (px1 + px2) * 0.5
+#     pcy = (py1 + py2) * 0.5
+#     tcx = (tx1 + tx2) * 0.5
+#     tcy = (ty1 + ty2) * 0.5
 
-    pw = (px2 - px1).clamp(min=eps)
-    ph = (py2 - py1).clamp(min=eps)
-    tw = (tx2 - tx1).clamp(min=eps)
-    th = (ty2 - ty1).clamp(min=eps)
+#     pw = (px2 - px1).clamp(min=eps)
+#     ph = (py2 - py1).clamp(min=eps)
+#     tw = (tx2 - tx1).clamp(min=eps)
+#     th = (ty2 - ty1).clamp(min=eps)
 
-    # simplified W2 distance (diagonal covariance), scale factor absorbed by C
-    w2 = (pcx - tcx).pow(2) + (pcy - tcy).pow(2) + (pw - tw).pow(2) * 0.25 + (ph - th).pow(2) * 0.25
-    dist = torch.sqrt(w2 + eps)
+#     # simplified W2 distance (diagonal covariance), scale factor absorbed by C
+#     w2 = (pcx - tcx).pow(2) + (pcy - tcy).pow(2) + (pw - tw).pow(2) * 0.25 + (ph - th).pow(2) * 0.25
+#     dist = torch.sqrt(w2 + eps)
 
-    # NWD similarity
-    C = float(C)
-    return torch.exp(-dist / (C + eps))
+#     # NWD similarity
+#     C = float(C)
+#     return torch.exp(-dist / (C + eps))
 
