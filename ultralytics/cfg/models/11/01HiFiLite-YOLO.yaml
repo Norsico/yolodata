@@ -1,3 +1,5 @@
+# HiFiLite-YOLO (High-Fidelity, lightweight YOLO with P2 high-frequency perception and clean detail fusion)
+
 nc: 6
 
 scales:
