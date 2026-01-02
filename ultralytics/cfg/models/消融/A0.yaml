@@ -1,0 +1,56 @@
+# Ablation Model: Naive P2 Structure + DySample + DSC3k2
+nc: 6
+scales:
+  n: [0.50, 0.22, 1024]
+
+backbone:
+  - [-1, 1, Conv,   [64, 3, 2]]                 # 0 P1/2
+  - [-1, 1, Conv,   [128, 3, 2]]                # 1 P2/4
+  - [-1, 2, C3k2, [256, False, 0.25]]           # 2 
+  - [-1, 1, Conv,   [256, 3, 2]]                # 3 P3/8
+  - [-1, 2, C3k2, [512, False, 0.25]]           # 4 
+  - [-1, 1, Conv,   [512, 3, 2]]                # 5 P4/16
+  - [-1, 2, C3k2, [512, True]]                  # 6
+  - [-1, 1, Conv,   [1024, 3, 2]]               # 7 P5/32
+  - [-1, 2, C3k2, [1024, True]]                 # 8 
+  - [-1, 1, SPPF,   [1024, 5]]                  # 9
+  - [-1, 2, C2PSA,  [1024]]                     # 10
+
+head:
+  # ============ Top-Down Path (P5 -> P4 -> P3 -> P2) ============
+  
+  # P5 -> P4
+  - [-1, 1, DySample, [2, 'lp']]                # 11 (Upsample -> DySample)
+  - [[-1, 6], 1, Concat, [1]]                   # 12
+  - [-1, 2, C3k2, [512, False]]               # 13 (Head P4)
+
+  # P4 -> P3
+  - [-1, 1, DySample, [2, 'lp']]                # 14 (Upsample -> DySample)
+  - [[-1, 4], 1, Concat, [1]]                   # 15
+  - [-1, 2, C3k2, [256, False]]               # 16 (Head P3)
+
+  # P3 -> P2 
+  - [-1, 1, DySample, [2, 'lp']]                # 17 (Upsample -> DySample)
+  - [[-1, 2], 1, Concat, [1]]                   # 18 (Cat Backbone P2)
+  - [-1, 2, C3k2, [128, False]]               # 19 (Head P2) -> P2 输出
+
+  # ============ Bottom-Up Path (P2 -> P3 -> P4 -> P5) ============
+
+  # P2 -> P3
+  - [-1, 1, Conv, [128, 3, 2]]                  # 20 (Downsample)
+  - [[-1, 16], 1, Concat, [1]]                  # 21 (Cat Head P3)
+  - [-1, 2, C3k2, [256, False]]               # 22 (Head P3 Final) -> P3 输出
+
+  # P3 -> P4
+  - [-1, 1, Conv, [256, 3, 2]]                  # 23
+  - [[-1, 13], 1, Concat, [1]]                  # 24
+  - [-1, 2, C3k2, [512, False]]               # 25 (Head P4 Final) -> P4 输出
+
+  # P4 -> P5
+  - [-1, 1, Conv, [512, 3, 2]]                  # 26
+  - [[-1, 10], 1, Concat, [1]]                  # 27
+  - [-1, 2, C3k2, [1024, True]]               # 28 (Head P5 Final) -> P5 输出
+
+  # ============ Detect ============
+  # Inputs: [P2(19), P3(22), P4(25), P5(28)]
+  - [[19, 22, 25, 28], 1, DetectLitePDW, [nc]]  # 29
