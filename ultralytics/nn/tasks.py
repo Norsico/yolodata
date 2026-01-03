@@ -103,6 +103,7 @@ from ultralytics.nn.modules import (
     DetectHybridP2G,
     DSC3k2,
     DSC3k2X,
+    RDSC3k2,
     GCR,
     ParamAlignMLP,
 )
@@ -1576,6 +1577,7 @@ def parse_model(d, ch, verbose=True):
             C3k2,
             DSC3k2,
             DSC3k2X,
+            RDSC3k2,
             RepNCSPELAN4,
             ELAN1,
             ADown,
@@ -1618,6 +1620,7 @@ def parse_model(d, ch, verbose=True):
             C3k2,
             DSC3k2,
             DSC3k2X,
+            RDSC3k2,
             C2fAttn,
             C3,
             C3TR,

@@ -91,6 +91,7 @@ from .block import (
     HFPLite,
     DSC3k2,
     DSC3k2X,
+    RDSC3k2,
     GCR,
     ParamAlignMLP,
 )
@@ -251,6 +252,7 @@ __all__ = (
     "DetectHybridP2G",
     "DSC3k2",
     "DSC3k2X",
+    "RDSC3k2",
     "GCR",
     "ParamAlignMLP"
 )

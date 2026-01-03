@@ -3685,8 +3685,223 @@ class DSC3k2(nn.Module):
         return self.cv3(torch.cat((y1, y2), dim=1))
 
 
-import torch
-import torch.nn as nn
+def _fuse_conv_bn(conv: nn.Conv2d, bn: nn.BatchNorm2d):
+    """Fuse Conv2d(bias=False) + BN -> (weight, bias)"""
+    w = conv.weight
+    if conv.bias is None:
+        bias = torch.zeros(w.size(0), device=w.device, dtype=w.dtype)
+    else:
+        bias = conv.bias
+
+    gamma = bn.weight
+    beta = bn.bias
+    mean = bn.running_mean
+    var = bn.running_var
+    eps = bn.eps
+
+    std = torch.sqrt(var + eps)
+    w_fused = w * (gamma / std).reshape(-1, 1, 1, 1)
+    b_fused = beta + (bias - mean) * gamma / std
+    return w_fused, b_fused
+
+
+def _pad_1x1_to_3x3_kernel(k1):
+    """(C,1,1,1) -> (C,1,3,3) center"""
+    if k1 is None:
+        return 0
+    k3 = torch.zeros((k1.size(0), k1.size(1), 3, 3), device=k1.device, dtype=k1.dtype)
+    k3[:, :, 1:2, 1:2] = k1
+    return k3
+
+
+def _dw_identity_kernel(c, device, dtype):
+    """Depthwise identity as 3x3 kernel"""
+    k = torch.zeros((c, 1, 3, 3), device=device, dtype=dtype)
+    k[:, :, 1, 1] = 1.0
+    return k
+
+
+class RepDWConv(nn.Module):
+    """
+    Re-parameterizable depthwise conv:
+      train: sum(DW3x3 branches + DW1x1 + Identity) -> act
+      deploy: single DW3x3 (bias=True) -> act
+
+    c3k: 通过 num_3x3 分支数控制训练期容量（推理融合后仍为单分支）
+    """
+    def __init__(self, c, s=1, num_3x3=2, act=True):
+        super().__init__()
+        self.c = c
+        self.s = s
+        self.num_3x3 = num_3x3
+        self.act = nn.SiLU() if act else nn.Identity()
+        self.deploy = False
+
+        self.dw3 = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(c, c, 3, s, 1, groups=c, bias=False),
+                nn.BatchNorm2d(c)
+            ) for _ in range(num_3x3)
+        ])
+
+        self.dw1 = nn.Sequential(
+            nn.Conv2d(c, c, 1, s, 0, groups=c, bias=False),
+            nn.BatchNorm2d(c)
+        )
+
+        self.id_bn = nn.BatchNorm2d(c) if s == 1 else None
+        self.dw_reparam = None
+
+    def forward(self, x):
+        if self.deploy:
+            return self.act(self.dw_reparam(x))
+
+        out = 0
+        for b in self.dw3:
+            out = out + b(x)
+        out = out + self.dw1(x)
+        if self.id_bn is not None:
+            out = out + self.id_bn(x)
+        return self.act(out)
+
+    @torch.no_grad()
+    def switch_to_deploy(self):
+        if self.deploy:
+            return
+
+        device = next(self.parameters()).device
+        dtype = next(self.parameters()).dtype
+
+        k_sum = 0
+        b_sum = 0
+
+        # DW3x3 branches
+        for b in self.dw3:
+            conv, bn = b[0], b[1]
+            k, bias = _fuse_conv_bn(conv, bn)
+            k_sum = k_sum + k
+            b_sum = b_sum + bias
+
+        # DW1x1 branch -> pad to 3x3
+        k1, b1 = _fuse_conv_bn(self.dw1[0], self.dw1[1])
+        k_sum = k_sum + _pad_1x1_to_3x3_kernel(k1)
+        b_sum = b_sum + b1
+
+        # Identity BN
+        if self.id_bn is not None:
+            id_k = _dw_identity_kernel(self.c, device, dtype)
+            gamma = self.id_bn.weight
+            beta = self.id_bn.bias
+            mean = self.id_bn.running_mean
+            var = self.id_bn.running_var
+            eps = self.id_bn.eps
+            std = torch.sqrt(var + eps)
+
+            id_k = id_k * (gamma / std).reshape(-1, 1, 1, 1)
+            id_b = beta + (-mean) * gamma / std
+
+            k_sum = k_sum + id_k
+            b_sum = b_sum + id_b
+
+        # Create reparam conv
+        self.dw_reparam = nn.Conv2d(
+            self.c, self.c, 3, self.s, 1,
+            groups=self.c, bias=True
+        ).to(device=device, dtype=dtype)
+
+        self.dw_reparam.weight.data.copy_(k_sum)
+        self.dw_reparam.bias.data.copy_(b_sum)
+
+        # Drop train-time branches
+        del self.dw3
+        del self.dw1
+        if self.id_bn is not None:
+            del self.id_bn
+
+        self.deploy = True
+
+
+class RepDSConv(nn.Module):
+    """RepDWConv + pointwise 1x1"""
+    def __init__(self, c, num_3x3=2):
+        super().__init__()
+        self.dw = RepDWConv(c, s=1, num_3x3=num_3x3, act=True)
+        self.pw = Conv(c, c, 1, 1)  # 你工程里的 Conv（含BN+Act）
+
+    def forward(self, x):
+        return self.pw(self.dw(x))
+
+    def switch_to_deploy(self):
+        self.dw.switch_to_deploy()
+
+
+class RepDSBottleneck(nn.Module):
+    """
+    1x1 -> RepDSConv -> residual
+    + LayerScale(γ=0) 稳定训练（尤其 repeat 堆叠）
+    """
+    def __init__(self, c, shortcut=True, num_3x3=2, layerscale=True):
+        super().__init__()
+        self.cv1 = Conv(c, c, 1, 1)
+        self.cv2 = RepDSConv(c, num_3x3=num_3x3)
+        self.add = shortcut
+        self.gamma = nn.Parameter(torch.zeros(c), requires_grad=True) if (shortcut and layerscale) else None
+
+    def forward(self, x):
+        y = self.cv2(self.cv1(x))
+        if self.gamma is not None:
+            y = y * self.gamma.view(1, -1, 1, 1)
+        return x + y if self.add else y
+
+    def switch_to_deploy(self):
+        self.cv2.switch_to_deploy()
+
+
+class RDSC3k2(nn.Module):
+    """
+    Drop-in replacement:
+      (c1, c2, n=1, shortcut=False, e=0.5, c3k=False)
+
+    c3k 用作“训练期更强”的开关：num_3x3=3，否则=2
+    推理融合后仍为单 DW3x3，不显著增加推理计算。
+    """
+    def __init__(self, c1, c2, n=1, shortcut=False, e=0.5, c3k=False):
+        super().__init__()
+        c_ = int(c2 * e)
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c1, c_, 1, 1)
+
+        num_3x3 = 3 if c3k else 2
+        self.m = nn.Sequential(*[
+            RepDSBottleneck(c_, shortcut=shortcut, num_3x3=num_3x3, layerscale=True)
+            for _ in range(n)
+        ])
+
+        self.cv3 = Conv(2 * c_, c2, 1, 1)
+
+    def forward(self, x):
+        y1 = self.m(self.cv1(x))
+        y2 = self.cv2(x)
+        return self.cv3(torch.cat((y1, y2), dim=1))
+
+    @torch.no_grad()
+    def switch_to_deploy(self):
+        for m in self.modules():
+            if hasattr(m, "switch_to_deploy"):
+                m.switch_to_deploy()
+
+
+@torch.no_grad()
+def reparameterize_model(model: nn.Module):
+    """
+    Call before val/export/benchmark to get real inference structure & GFLOPs.
+    """
+    model.eval()
+    for m in model.modules():
+        if hasattr(m, "switch_to_deploy"):
+            m.switch_to_deploy()
+    return model
+    
 
 class ECA(nn.Module):
     """Efficient Channel Attention (very light)"""
