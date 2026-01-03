@@ -3685,6 +3685,106 @@ class DSC3k2(nn.Module):
         return self.cv3(torch.cat((y1, y2), dim=1))
 
 
+import torch
+import torch.nn as nn
+
+class ECA(nn.Module):
+    """Efficient Channel Attention (very light)"""
+    def __init__(self, c, k_size=3):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.conv = nn.Conv1d(1, 1, kernel_size=k_size, padding=(k_size - 1) // 2, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        y = self.avg_pool(x)                               # (B, C, 1, 1)
+        y = y.squeeze(-1).transpose(-1, -2)                # (B, 1, C)
+        y = self.conv(y)                                   # (B, 1, C)
+        y = self.sigmoid(y).transpose(-1, -2).unsqueeze(-1)# (B, C, 1, 1)
+        return x * y
+
+
+class MixDWConv(nn.Module):
+    """
+    Mixed-kernel depthwise conv: split channels -> DW3x3 + DW5x5 (or 3x3 only)
+    """
+    def __init__(self, c, s=1, ratio=0.5, use_k5=True):
+        super().__init__()
+        c1 = int(round(c * ratio))
+        c2 = c - c1
+        self.c1 = c1
+        self.c2 = c2
+        self.use_k5 = use_k5 and (c2 > 0)
+
+        self.dw3 = DWConv(c1, c1, 3, s)
+        if self.use_k5:
+            self.dw5 = DWConv(c2, c2, 5, s)
+
+    def forward(self, x):
+        if self.c2 == 0:
+            return self.dw3(x)
+        x1, x2 = x.split([self.c1, self.c2], dim=1)
+        y1 = self.dw3(x1)
+        if self.use_k5:
+            y2 = self.dw5(x2)
+        else:
+            y2 = x2
+        return torch.cat([y1, y2], dim=1)
+
+
+class LiteMBECA(nn.Module):
+    """
+    Lite MBConv + ECA + LayerScale
+    - expand (1x1) -> (mix)dw -> eca -> project (1x1, no act) -> residual
+    """
+    def __init__(self, c, shortcut=True, exp=2.0, c3k=False):
+        super().__init__()
+        c_exp = max(8, int(round(c * exp)))
+
+        self.expand = Conv(c, c_exp, 1, 1)                          # 1x1 expand
+        # c3k: 让你用同一个签名开关“更强空间建模”
+        self.dw = MixDWConv(c_exp, s=1, ratio=0.5, use_k5=c3k) if c3k else DWConv(c_exp, c_exp, 3, 1)
+        self.eca = ECA(c_exp, k_size=3)
+        self.project = Conv(c_exp, c, 1, 1, act=False)              # 1x1 project (linear)
+
+        self.add = shortcut
+        # LayerScale: 初始 0，训练更稳（ConvNeXt/modern blocks 常用）
+        self.gamma = nn.Parameter(torch.zeros(c), requires_grad=True) if shortcut else None
+
+    def forward(self, x):
+        y = self.project(self.eca(self.dw(self.expand(x))))
+        if self.gamma is not None:
+            y = y * self.gamma.view(1, -1, 1, 1)
+        return x + y if self.add else y
+
+
+class DSC3k2X(nn.Module):
+    """
+    Stronger drop-in replacement for DSC3k2/C3k2:
+    (c1, c2, n=1, shortcut=False, e=0.5, c3k=False)
+    - CSP shell unchanged
+    - inside uses LiteMBECA
+    """
+    def __init__(self, c1, c2, n=1, shortcut=False, e=0.5, c3k=False):
+        super().__init__()
+        c_ = int(c2 * e)
+
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c1, c_, 1, 1)
+
+        # exp 建议给一个“轻但有效”的默认：2.0
+        # 如果你极限追速度：可以改成 1.5；如果追精度：2.0~2.5
+        self.m = nn.Sequential(*[LiteMBECA(c_, shortcut=shortcut, exp=2.0, c3k=c3k) for _ in range(n)])
+
+        self.cv3 = Conv(2 * c_, c2, 1, 1)
+
+    def forward(self, x):
+        y1 = self.m(self.cv1(x))
+        y2 = self.cv2(x)
+        return self.cv3(torch.cat((y1, y2), dim=1))
+
+
+
 class GCR(nn.Module):
     """
     Global Channel Refinement (ParamAlign)
