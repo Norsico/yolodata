@@ -3,10 +3,19 @@
 
 """
 
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+exec zsh
+
+source activate 
+conda activate yolo
+mkdir ./挂机
+
+
 nohup python3 挂机训练.py \
   --data /root/yolodata/datasets/VisDrone/VisDrone.yaml \
-  --epochs 100 --batch 16 --imgsz 640 --device 0 --workers 8 \
-  --models /root/yolodata/ultralytics/cfg/models/消融/A0.yaml /root/yolodata/ultralytics/cfg/models/消融/A1.yaml \
+  --epochs 300 --batch 16 --imgsz 640 --device 0 --workers 8 \
+  --models /root/yolodata/ultralytics/cfg/models/1_4/A5_+DSC3k2X.yaml \
   --cache --zip --zip-overwrite \
   > ./挂机/nohup.out 2>&1 &
 
